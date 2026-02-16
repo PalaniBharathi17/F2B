@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Layout, Button, Typography, Row, Col, Card, Statistic, Space } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -11,6 +11,7 @@ import {
     VerifiedOutlined,
     ArrowRightOutlined
 } from '@ant-design/icons';
+import { getAdminOverview } from '../../api/admin';
 import './LandingPage.css';
 
 const { Header, Content, Footer } = Layout;
@@ -18,6 +19,19 @@ const { Title, Paragraph, Text } = Typography;
 
 const LandingPage = () => {
     const navigate = useNavigate();
+    const [stats, setStats] = useState(null);
+
+    useEffect(() => {
+        const loadOverview = async () => {
+            try {
+                const data = await getAdminOverview();
+                setStats(data?.stats || null);
+            } catch {
+                setStats(null);
+            }
+        };
+        loadOverview();
+    }, []);
 
     return (
         <Layout className="landing-layout">
@@ -99,28 +113,28 @@ const LandingPage = () => {
                         <Col xs={12} md={6}>
                             <Statistic
                                 title="Active Farmers"
-                                value="1,200+"
+                                value={stats?.total_users || 0}
                                 valueStyle={{ color: '#13ec13', fontWeight: 'bold' }}
                             />
                         </Col>
                         <Col xs={12} md={6}>
                             <Statistic
                                 title="Fresh Products"
-                                value="5k+"
+                                value={stats?.active_products || 0}
                                 valueStyle={{ color: '#13ec13', fontWeight: 'bold' }}
                             />
                         </Col>
                         <Col xs={12} md={6}>
                             <Statistic
                                 title="Delivery Speed"
-                                value="< 24h"
+                                value={`${Math.max(1, Math.round(100 - (stats?.api_response_time || 0) / 4))}h`}
                                 valueStyle={{ color: '#13ec13', fontWeight: 'bold' }}
                             />
                         </Col>
                         <Col xs={12} md={6}>
                             <Statistic
                                 title="Quality Match"
-                                value="99.9%"
+                                value={`${(stats?.resolution_rate || 0).toFixed(1)}%`}
                                 valueStyle={{ color: '#13ec13', fontWeight: 'bold' }}
                             />
                         </Col>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
     Layout,
     Card,
@@ -26,50 +26,50 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { getFarmers } from '../../api/users';
+import { getCart } from '../../api/cart';
 import './BuyerDashboard.css';
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 const FarmerList = () => {
+    const [farmers, setFarmers] = useState([]);
+    const [cartCount, setCartCount] = useState(0);
     const navigate = useNavigate();
     const { logout } = useAuth();
 
-    const farmers = [
-        {
-            id: 1,
-            name: 'Green Valley Farm',
-            specialty: 'Organic Vegetables',
-            location: 'Salem, OR',
-            distance: '5.2 mi',
-            rating: 4.9,
-            reviews: 128,
-            image: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&h=200&fit=crop',
-            verified: true
-        },
-        {
-            id: 2,
-            name: 'Sunny Acres',
-            specialty: 'Fruits & Berries',
-            location: 'Portland, OR',
-            distance: '12.4 mi',
-            rating: 4.7,
-            reviews: 86,
-            image: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=200&h=200&fit=crop',
-            verified: true
-        },
-        {
-            id: 3,
-            name: 'Bees & Bloom',
-            specialty: 'Honey & Pollen',
-            location: 'Eugene, OR',
-            distance: '8.5 mi',
-            rating: 4.8,
-            reviews: 54,
-            image: 'https://images.unsplash.com/photo-1531427186611-ecfd6d936c79?w=200&h=200&fit=crop',
-            verified: false
-        }
-    ];
+    useEffect(() => {
+        const loadFarmers = async () => {
+            try {
+                const data = await getFarmers();
+                const mapped = (data?.items || []).map((farmer) => ({
+                    id: farmer.id,
+                    name: farmer.name,
+                    specialty: farmer?.farmer_profile?.farm_name || 'Local Produce',
+                    location: `${farmer.city || 'N/A'}, ${farmer.state || 'N/A'}`,
+                    distance: 'nearby',
+                    rating: farmer?.farmer_profile?.rating_average || 0,
+                    reviews: farmer?.farmer_profile?.completed_orders || 0,
+                    image: '',
+                    verified: (farmer?.farmer_profile?.badge || 'BRONZE') !== 'BRONZE'
+                }));
+                setFarmers(mapped);
+            } catch {
+                setFarmers([]);
+            }
+        };
+        const loadCartCount = async () => {
+            try {
+                const data = await getCart();
+                setCartCount((data?.items || []).length);
+            } catch {
+                setCartCount(0);
+            }
+        };
+        loadFarmers();
+        loadCartCount();
+    }, []);
 
     const handleLogout = () => {
         logout();
@@ -98,7 +98,7 @@ const FarmerList = () => {
                         <Button type="text" className="nav-link" onClick={() => navigate('/buyer/browse')}>Browse</Button>
                         <Button type="text" className="nav-link" onClick={() => navigate('/buyer/farmers')}>Farmers</Button>
                         <Button type="text" className="nav-link" onClick={() => navigate('/buyer/orders')}>Orders</Button>
-                        <Badge count={3} offset={[-5, 5]}>
+                        <Badge count={cartCount} offset={[-5, 5]}>
                             <Button
                                 type="text"
                                 icon={<ShoppingCartOutlined style={{ fontSize: '20px' }} />}
@@ -132,7 +132,7 @@ const FarmerList = () => {
                         <Col xs={24} md={12} lg={8} key={farmer.id}>
                             <Card className="product-card" style={{ padding: '8px' }}>
                                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                                    <Avatar size={80} src={farmer.image} />
+                                    <Avatar size={80} src={farmer.image} icon={<UserOutlined />} />
                                     <div>
                                         <Space>
                                             <Title level={4} style={{ margin: 0 }}>{farmer.name}</Title>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Layout,
     Menu,
@@ -15,7 +15,8 @@ import {
     Row,
     Col,
     Statistic,
-    Tabs
+    Tabs,
+    message
 } from 'antd';
 import {
     DashboardOutlined,
@@ -27,11 +28,11 @@ import {
     LogoutOutlined,
     SearchOutlined,
     MoreOutlined,
-    EnvironmentOutlined,
-    CalendarOutlined
+    ArrowUpOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { cancelOrder, getFarmerOrders, updateOrderStatus } from '../../api/orders';
 import './FarmerDashboard.css';
 
 const { Header, Sider, Content } = Layout;
@@ -39,52 +40,97 @@ const { Title, Text } = Typography;
 
 const FarmerOrders = () => {
     const [collapsed, setCollapsed] = useState(false);
+    const [ordersData, setOrdersData] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [activeTab, setActiveTab] = useState('all');
+    const [query, setQuery] = useState('');
     const navigate = useNavigate();
-    const { logout } = useAuth();
+    const { user, logout } = useAuth();
+
+    const loadOrders = async () => {
+        setLoading(true);
+        try {
+            const data = await getFarmerOrders();
+            setOrdersData(data?.orders || []);
+        } catch {
+            setOrdersData([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadOrders();
+    }, []);
 
     const handleLogout = () => {
         logout();
         navigate('/');
     };
+    const tableData = useMemo(() => (
+        ordersData
+            .filter((order) => {
+                if (activeTab === 'pending') return order.status === 'pending';
+                if (activeTab === 'shipped') return order.status === 'confirmed';
+                if (activeTab === 'completed') return order.status === 'completed';
+                return true;
+            })
+            .filter((order) => {
+                const q = query.trim().toLowerCase();
+                if (!q) return true;
+                return (
+                    String(order.id).includes(q)
+                    || (order?.buyer?.name || '').toLowerCase().includes(q)
+                    || (order?.product?.crop_name || '').toLowerCase().includes(q)
+                );
+            })
+            .map((order) => ({
+            key: order.id,
+            orderId: `#ORD-${order.id}`,
+            date: new Date(order.created_at).toLocaleDateString(),
+            buyer: order?.buyer?.name || 'Buyer',
+            items: `${order.quantity} ${order?.product?.unit || 'unit'} ${order?.product?.crop_name || 'Produce'}`,
+            amount: `₹${Number(order.total_price || 0).toFixed(2)}`,
+            status: order.status,
+            }))
+    ), [ordersData, activeTab, query]);
 
-    const ordersData = [
-        {
-            key: '1',
-            orderId: '#ORD-7742',
-            date: '2024-03-12',
-            buyer: 'Whole Foods Market',
-            items: '150kg Tomatoes',
-            amount: '$675.00',
-            status: 'processing',
-        },
-        {
-            key: '2',
-            orderId: '#ORD-7739',
-            date: '2024-03-11',
-            buyer: 'Alice Wong',
-            items: '20 Dozen Eggs',
-            amount: '$150.00',
-            status: 'delivered',
-        },
-        {
-            key: '3',
-            orderId: '#ORD-7735',
-            date: '2024-03-10',
-            buyer: 'Bob Miller',
-            items: '5kg Honey',
-            amount: '$60.00',
-            status: 'transit',
-        },
-        {
-            key: '4',
-            orderId: '#ORD-7731',
-            date: '2024-03-09',
-            buyer: 'Central Grocers',
-            items: '500kg Potatoes',
-            amount: '$550.00',
-            status: 'delivered',
+    const getActionsForStatus = (status) => {
+        if (status === 'pending') {
+            return [
+                { key: 'confirmed', label: 'Confirm Order' },
+                { key: 'cancelled', label: 'Cancel Order' },
+            ];
         }
-    ];
+        if (status === 'confirmed') {
+            return [
+                { key: 'completed', label: 'Mark Completed' },
+                { key: 'cancelled', label: 'Cancel Order' },
+            ];
+        }
+        return [];
+    };
+
+    const handleOrderAction = async (orderId, nextStatus) => {
+        try {
+            if (nextStatus === 'cancelled') {
+                await cancelOrder(orderId);
+            } else {
+                await updateOrderStatus(orderId, nextStatus);
+            }
+            message.success('Order updated successfully');
+            await loadOrders();
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Failed to update order');
+        }
+    };
+
+    const activeOrders = tableData.filter((o) => o.status === 'pending' || o.status === 'confirmed').length;
+    const totalRevenue = ordersData
+        .filter((o) => o.status === 'completed')
+        .reduce((sum, o) => sum + Number(o.total_price || 0), 0);
+    const completedCount = tableData.filter((o) => o.status === 'completed').length;
+    const orderGrowth = tableData.length ? Math.round((completedCount / tableData.length) * 100) : 0;
 
     const columns = [
         {
@@ -120,20 +166,37 @@ const FarmerOrders = () => {
             key: 'status',
             render: (status) => {
                 const statusConfig = {
-                    delivered: { color: 'success', text: 'Delivered' },
-                    processing: { color: 'warning', text: 'Processing' },
-                    transit: { color: 'processing', text: 'In Transit' }
+                    completed: { color: 'success', text: 'Completed' },
+                    confirmed: { color: 'processing', text: 'Confirmed' },
+                    pending: { color: 'warning', text: 'Pending' },
+                    cancelled: { color: 'error', text: 'Cancelled' }
                 };
-                const config = statusConfig[status];
+                const config = statusConfig[status] || { color: 'default', text: status };
                 return <Tag color={config.color}>{config.text}</Tag>;
             },
         },
         {
             title: 'Action',
             key: 'action',
-            render: () => (
-                <Button type="text" icon={<MoreOutlined />} />
-            ),
+            render: (_, record) => {
+                const actions = getActionsForStatus(record.status);
+                if (!actions.length) {
+                    return <Button type="text" icon={<MoreOutlined />} disabled />;
+                }
+                return (
+                    <Dropdown
+                        menu={{
+                            items: actions.map((action) => ({
+                                key: action.key,
+                                label: action.label,
+                                onClick: () => handleOrderAction(record.key, action.key),
+                            })),
+                        }}
+                    >
+                        <Button type="text" icon={<MoreOutlined />} />
+                    </Dropdown>
+                );
+            },
         },
     ];
 
@@ -198,7 +261,7 @@ const FarmerOrders = () => {
                         <Avatar size={40} icon={<UserOutlined />} src="https://i.pravatar.cc/150?img=12" />
                         {!collapsed && (
                             <div className="user-info">
-                                <Text strong style={{ color: 'white', fontSize: '14px' }}>Farmer Joe</Text>
+                                <Text strong style={{ color: 'white', fontSize: '14px' }}>{user?.name || 'Farmer'}</Text>
                                 <Tag color="success" style={{ fontSize: '10px', padding: '0 6px' }}>PRO SELLER</Tag>
                             </div>
                         )}
@@ -216,8 +279,10 @@ const FarmerOrders = () => {
                             placeholder="Search orders..."
                             prefix={<SearchOutlined />}
                             className="search-input"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
                         />
-                        <Badge count={3} offset={[-5, 5]}>
+                        <Badge count={ordersData.filter((o) => o.status === 'pending').length} offset={[-5, 5]}>
                             <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
                         </Badge>
                         <Dropdown
@@ -236,24 +301,25 @@ const FarmerOrders = () => {
                     <Row gutter={[24, 24]} className="stats-row">
                         <Col xs={24} sm={8}>
                             <Card className="stat-card">
-                                <Statistic title="Active Orders" value={5} prefix={<ShoppingOutlined style={{ color: '#faad14', marginRight: '8px' }} />} />
+                                <Statistic title="Active Orders" value={activeOrders} prefix={<ShoppingOutlined style={{ color: '#faad14', marginRight: '8px' }} />} />
                             </Card>
                         </Col>
                         <Col xs={24} sm={8}>
                             <Card className="stat-card">
-                                <Statistic title="Total Revenue" value={14250} prefix="$" valueStyle={{ color: '#52c41a' }} />
+                                <Statistic title="Total Revenue" value={Number(totalRevenue.toFixed(2))} prefix="₹" valueStyle={{ color: '#52c41a' }} />
                             </Card>
                         </Col>
                         <Col xs={24} sm={8}>
                             <Card className="stat-card">
-                                <Statistic title="Order Growth" value={12} suffix="%" prefix={<ArrowUpOutlined />} valueStyle={{ color: '#52c41a' }} />
+                                <Statistic title="Order Growth" value={orderGrowth} suffix="%" prefix={<ArrowUpOutlined />} valueStyle={{ color: '#52c41a' }} />
                             </Card>
                         </Col>
                     </Row>
 
                     <Card className="activity-card">
                         <Tabs
-                            defaultActiveKey="all"
+                            activeKey={activeTab}
+                            onChange={setActiveTab}
                             items={[
                                 { key: 'all', label: 'All Orders' },
                                 { key: 'pending', label: 'Pending' },
@@ -263,8 +329,9 @@ const FarmerOrders = () => {
                         />
                         <Table
                             columns={columns}
-                            dataSource={ordersData}
+                            dataSource={tableData}
                             className="activity-table"
+                            loading={loading}
                         />
                     </Card>
                 </Content>

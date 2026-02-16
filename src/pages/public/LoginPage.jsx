@@ -1,70 +1,106 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Card, Typography, message, Space } from 'antd';
-import { MobileOutlined, LockOutlined, ArrowLeftOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { Form, Input, Button, Card, Typography, message, Space, Alert } from 'antd';
+import { UserOutlined, LockOutlined, ArrowLeftOutlined, MailOutlined, PhoneOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { loginRequest, registerRequest } from '../../api/auth';
 import './LoginPage.css';
 
 const { Title, Text, Paragraph } = Typography;
 
 const LoginPage = () => {
     const [loading, setLoading] = useState(false);
-    const [otpSent, setOtpSent] = useState(false);
-    const [mobileNumber, setMobileNumber] = useState('');
+    const [isRegisterMode, setIsRegisterMode] = useState(false);
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const { login } = useAuth();
 
     const role = searchParams.get('role') || 'buyer';
+    const isAdmin = role === 'admin';
 
     const getRoleColor = () => {
         switch (role) {
             case 'farmer': return '#13ec13';
             case 'buyer': return '#13ec13';
-            case 'admin': return '#722ed1';
             default: return '#13ec13';
         }
     };
 
-    const getRoleIcon = () => {
-        switch (role) {
-            case 'farmer': return '🌾';
-            case 'buyer': return '🛒';
-            case 'admin': return '👨‍💼';
-            default: return '👤';
+    const handleAuthSuccess = (payload) => {
+        login(payload);
+        const dashboardRole = payload?.user?.user_type || role;
+        navigate(`/${dashboardRole}/dashboard`);
+    };
+
+    const onLogin = async (values) => {
+        setLoading(true);
+        try {
+            const data = await loginRequest({
+                email: values.email,
+                password: values.password,
+            });
+
+            if (data?.user?.user_type && data.user.user_type !== role) {
+                message.error(`This account is registered as ${data.user.user_type}.`);
+                setLoading(false);
+                return;
+            }
+
+            message.success('Login successful');
+            handleAuthSuccess(data);
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Login failed');
+        } finally {
+            setLoading(false);
         }
     };
 
-    const onFinishMobile = (values) => {
+    const onRegister = async (values) => {
         setLoading(true);
-        setMobileNumber(values.mobile);
-        // Simulate API call to send OTP
-        setTimeout(() => {
+        try {
+            const data = await registerRequest({
+                name: values.name,
+                email: values.email,
+                phone: values.phone,
+                password: values.password,
+                user_type: role,
+                city: values.city || '',
+                state: values.state || '',
+            });
+
+            message.success('Registration successful');
+            handleAuthSuccess(data);
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Registration failed');
+        } finally {
             setLoading(false);
-            setOtpSent(true);
-            message.success(`OTP sent to ${values.mobile}`);
-        }, 1000);
+        }
     };
 
-    const onFinishOtp = (values) => {
-        setLoading(true);
-        // Simulate API verification
-        setTimeout(() => {
-            setLoading(false);
-            if (values.otp === '1234') { // Mock OTP
-                const userData = {
-                    name: 'Demo User',
-                    mobile: mobileNumber,
-                    role: role
-                };
-                login(userData);
-                message.success('Login Successful!');
-                navigate(`/${role}/dashboard`);
-            } else {
-                message.error('Invalid OTP. Use 1234');
-            }
-        }, 1000);
-    };
+    if (isAdmin) {
+        return (
+            <div className="login-page">
+                <div className="login-container">
+                    <Button
+                        icon={<ArrowLeftOutlined />}
+                        onClick={() => navigate('/role-selection')}
+                        className="back-button-login"
+                    >
+                        Back
+                    </Button>
+                    <Card className="login-card">
+                        <Title level={3}>Admin Login</Title>
+                        <Alert
+                            type="info"
+                            showIcon
+                            message="Admin backend is not implemented yet."
+                            description="Use farmer or buyer login to test frontend-backend integration."
+                        />
+                    </Card>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="login-page">
@@ -79,42 +115,48 @@ const LoginPage = () => {
 
                 <Card className="login-card">
                     <div className="login-header">
-                        <div className="role-badge" style={{ background: `${getRoleColor()}15`, color: getRoleColor() }}>
-                            <span className="role-emoji">{getRoleIcon()}</span>
-                            <Text strong style={{ color: getRoleColor(), textTransform: 'capitalize' }}>
-                                {role} Portal
-                            </Text>
-                        </div>
                         <Title level={2} className="login-title">
-                            {!otpSent ? 'Welcome Back' : 'Verify OTP'}
+                            {isRegisterMode ? 'Create Account' : 'Welcome Back'}
                         </Title>
                         <Paragraph className="login-subtitle">
-                            {!otpSent
-                                ? 'Enter your mobile number to receive a one-time password'
-                                : `We've sent a 4-digit code to ${mobileNumber}`
+                            {isRegisterMode
+                                ? `Register as ${role}`
+                                : `Sign in as ${role}`
                             }
                         </Paragraph>
                     </div>
 
-                    {!otpSent ? (
+                    {!isRegisterMode ? (
                         <Form
-                            name="mobile_login"
-                            onFinish={onFinishMobile}
+                            name="email_login"
+                            onFinish={onLogin}
                             layout="vertical"
                             size="large"
                             className="login-form"
                         >
                             <Form.Item
-                                name="mobile"
-                                label="Mobile Number"
+                                name="email"
+                                label="Email"
                                 rules={[
-                                    { required: true, message: 'Please input your mobile number!' },
-                                    { pattern: /^[0-9]{10}$/, message: 'Please enter a valid 10-digit number' }
+                                    { required: true, message: 'Please enter your email' },
+                                    { type: 'email', message: 'Enter a valid email' },
                                 ]}
                             >
                                 <Input
-                                    prefix={<MobileOutlined style={{ color: getRoleColor() }} />}
-                                    placeholder="Enter 10-digit mobile number"
+                                    prefix={<MailOutlined style={{ color: getRoleColor() }} />}
+                                    placeholder="you@example.com"
+                                    className="custom-input"
+                                />
+                            </Form.Item>
+
+                            <Form.Item
+                                name="password"
+                                label="Password"
+                                rules={[{ required: true, message: 'Please enter your password' }]}
+                            >
+                                <Input.Password
+                                    prefix={<LockOutlined style={{ color: getRoleColor() }} />}
+                                    placeholder="Enter password"
                                     className="custom-input"
                                 />
                             </Form.Item>
@@ -128,43 +170,83 @@ const LoginPage = () => {
                                     className="submit-button"
                                     style={{ background: getRoleColor(), borderColor: getRoleColor() }}
                                 >
-                                    Send OTP
+                                    Login
                                 </Button>
                             </Form.Item>
-
-                            <div className="login-footer">
-                                <Text type="secondary" style={{ fontSize: '13px' }}>
-                                    By continuing, you agree to our Terms of Service and Privacy Policy
-                                </Text>
-                            </div>
                         </Form>
                     ) : (
                         <Form
-                            name="otp_verify"
-                            onFinish={onFinishOtp}
+                            name="register"
+                            onFinish={onRegister}
                             layout="vertical"
                             size="large"
                             className="login-form"
                         >
                             <Form.Item
-                                name="otp"
-                                label="One-Time Password"
-                                rules={[{ required: true, message: 'Please input the OTP!' }]}
+                                name="name"
+                                label="Full Name"
+                                rules={[{ required: true, message: 'Please enter your name' }]}
                             >
                                 <Input
-                                    prefix={<LockOutlined style={{ color: getRoleColor() }} />}
-                                    placeholder="Enter 4-digit OTP"
-                                    maxLength={4}
-                                    className="custom-input otp-input"
+                                    prefix={<UserOutlined style={{ color: getRoleColor() }} />}
+                                    placeholder="Your full name"
+                                    className="custom-input"
                                 />
                             </Form.Item>
 
-                            <div className="otp-hint">
-                                <CheckCircleOutlined style={{ color: getRoleColor() }} />
-                                <Text type="secondary" style={{ fontSize: '13px' }}>
-                                    For demo purposes, use OTP: <strong>1234</strong>
-                                </Text>
-                            </div>
+                            <Form.Item
+                                name="email"
+                                label="Email"
+                                rules={[
+                                    { required: true, message: 'Please enter your email' },
+                                    { type: 'email', message: 'Enter a valid email' },
+                                ]}
+                            >
+                                <Input
+                                    prefix={<MailOutlined style={{ color: getRoleColor() }} />}
+                                    placeholder="you@example.com"
+                                    className="custom-input"
+                                />
+                            </Form.Item>
+
+                            <Form.Item
+                                name="phone"
+                                label="Phone Number"
+                                rules={[
+                                    { required: true, message: 'Please enter your phone number' },
+                                    { pattern: /^[6-9]\d{9}$/, message: 'Use a valid 10-digit Indian number' },
+                                ]}
+                            >
+                                <Input
+                                    prefix={<PhoneOutlined style={{ color: getRoleColor() }} />}
+                                    placeholder="9876543210"
+                                    className="custom-input"
+                                />
+                            </Form.Item>
+
+                            <Form.Item
+                                name="password"
+                                label="Password"
+                                rules={[
+                                    { required: true, message: 'Please enter a password' },
+                                    { min: 6, message: 'Password must be at least 6 characters' },
+                                ]}
+                            >
+                                <Input.Password
+                                    prefix={<LockOutlined style={{ color: getRoleColor() }} />}
+                                    placeholder="Create password"
+                                    className="custom-input"
+                                />
+                            </Form.Item>
+
+                            <Space style={{ display: 'flex' }}>
+                                <Form.Item name="city" label="City" style={{ flex: 1 }}>
+                                    <Input placeholder="City" className="custom-input" />
+                                </Form.Item>
+                                <Form.Item name="state" label="State" style={{ flex: 1 }}>
+                                    <Input placeholder="State" className="custom-input" />
+                                </Form.Item>
+                            </Space>
 
                             <Form.Item>
                                 <Button
@@ -175,38 +257,21 @@ const LoginPage = () => {
                                     className="submit-button"
                                     style={{ background: getRoleColor(), borderColor: getRoleColor() }}
                                 >
-                                    Verify & Login
+                                    Register
                                 </Button>
                             </Form.Item>
-
-                            <div className="login-footer">
-                                <Button type="link" onClick={() => setOtpSent(false)} className="change-number-btn">
-                                    Change Mobile Number
-                                </Button>
-                                <Text type="secondary" style={{ fontSize: '13px' }}>
-                                    Didn't receive? <a href="#" style={{ color: getRoleColor() }}>Resend OTP</a>
-                                </Text>
-                            </div>
                         </Form>
                     )}
-                </Card>
 
-                <div className="security-badges">
-                    <Space size="large">
-                        <div className="badge-item">
-                            <CheckCircleOutlined style={{ fontSize: '20px', color: getRoleColor() }} />
-                            <Text type="secondary">Secure Login</Text>
-                        </div>
-                        <div className="badge-item">
-                            <CheckCircleOutlined style={{ fontSize: '20px', color: getRoleColor() }} />
-                            <Text type="secondary">OTP Verified</Text>
-                        </div>
-                        <div className="badge-item">
-                            <CheckCircleOutlined style={{ fontSize: '20px', color: getRoleColor() }} />
-                            <Text type="secondary">Data Protected</Text>
-                        </div>
-                    </Space>
-                </div>
+                    <div className="login-footer">
+                        <Text type="secondary" style={{ fontSize: '13px' }}>
+                            {isRegisterMode ? 'Already have an account?' : "Don't have an account?"}{' '}
+                        </Text>
+                        <Button type="link" onClick={() => setIsRegisterMode((prev) => !prev)}>
+                            {isRegisterMode ? 'Login' : 'Register'}
+                        </Button>
+                    </div>
+                </Card>
             </div>
         </div>
     );

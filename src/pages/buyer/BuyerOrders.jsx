@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Layout,
     Card,
@@ -23,49 +23,44 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { getBuyerOrders } from '../../api/orders';
 import './BuyerDashboard.css';
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 const BuyerOrders = () => {
+    const [orderHistory, setOrderHistory] = useState([]);
     const navigate = useNavigate();
     const { logout } = useAuth();
+
+    useEffect(() => {
+        const loadOrders = async () => {
+            try {
+                const data = await getBuyerOrders();
+                setOrderHistory(data?.orders || []);
+            } catch {
+                setOrderHistory([]);
+            }
+        };
+        loadOrders();
+    }, []);
 
     const handleLogout = () => {
         logout();
         navigate('/');
     };
-
-    const orderHistory = [
-        {
-            key: '1',
-            orderId: '#ORD-8821',
-            date: '2024-03-11',
-            items: 'Organic Tomatoes, Fresh Spinach',
-            total: '$45.50',
-            status: 'delivered',
-            farmer: 'Green Valley Farm'
-        },
-        {
-            key: '2',
-            orderId: '#ORD-8815',
-            date: '2024-03-08',
-            items: 'Artisan Honey (2 jars)',
-            total: '$24.00',
-            status: 'processing',
-            farmer: 'Bees & Bloom'
-        },
-        {
-            key: '3',
-            orderId: '#ORD-8798',
-            date: '2024-03-01',
-            items: 'Sweet Corn (24 pieces)',
-            total: '$36.00',
-            status: 'delivered',
-            farmer: 'Sunny Acres'
-        }
-    ];
+    const tableData = useMemo(() => (
+        orderHistory.map((order) => ({
+            key: order.id,
+            orderId: `#ORD-${order.id}`,
+            date: new Date(order.created_at).toLocaleDateString(),
+            items: `${order.quantity} ${order?.product?.unit || 'unit'} ${order?.product?.crop_name || 'Produce'}`,
+            total: `₹${Number(order.total_price || 0).toFixed(2)}`,
+            status: order.status,
+            farmer: order?.farmer?.name || 'Farmer'
+        }))
+    ), [orderHistory]);
 
     const columns = [
         {
@@ -102,7 +97,9 @@ const BuyerOrders = () => {
             key: 'status',
             render: (status) => {
                 let color = 'success';
-                if (status === 'processing') color = 'warning';
+                if (status === 'pending') color = 'warning';
+                if (status === 'cancelled') color = 'error';
+                if (status === 'confirmed') color = 'processing';
                 return <Tag color={color}>{status.toUpperCase()}</Tag>;
             }
         },
@@ -172,7 +169,7 @@ const BuyerOrders = () => {
                 <Card className="product-card" style={{ padding: 0 }}>
                     <Table
                         columns={columns}
-                        dataSource={orderHistory}
+                        dataSource={tableData}
                         pagination={false}
                     />
                 </Card>

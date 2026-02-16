@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Row, Col, Typography, Layout, Button } from 'antd';
+import { Card, Row, Col, Typography, Layout, Button, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
     UserOutlined,
@@ -16,6 +16,10 @@ const RoleSelection = () => {
     const navigate = useNavigate();
 
     const handleRoleSelect = (role) => {
+        if (role === 'admin') {
+            message.info('Admin backend is not implemented yet. Use farmer or buyer.');
+            return;
+        }
         navigate(`/login?role=${role}`);
     };
 

@@ -1,24 +1,37 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+server
 
-node_modules
-dist
-dist-ssr
-*.local
+# Test binary
+*.test
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Environment variables
+.env
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+Thumbs.db
