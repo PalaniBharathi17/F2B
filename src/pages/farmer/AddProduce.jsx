@@ -113,7 +113,7 @@ const AddProduce = () => {
         {
             key: 'add-produce',
             icon: <PlusOutlined />,
-            label: 'Add Produce',
+            label: 'Add Products',
             onClick: () => navigate('/farmer/add-produce')
         },
         {

@@ -62,6 +62,8 @@ func SetupRoutes() *gin.Engine {
 			products.GET("/:id", productHandler.GetProduct)
 			products.POST("", middleware.AuthMiddleware(), middleware.FarmerOnly(), productHandler.CreateProduct)
 			products.PUT("/:id", middleware.AuthMiddleware(), middleware.FarmerOnly(), productHandler.UpdateProduct)
+			products.PATCH("/bulk/status", middleware.AuthMiddleware(), middleware.FarmerOnly(), productHandler.BulkUpdateProductStatus)
+			products.PATCH("/:id/status", middleware.AuthMiddleware(), middleware.FarmerOnly(), productHandler.UpdateProductStatus)
 			products.DELETE("/:id", middleware.AuthMiddleware(), middleware.FarmerOnly(), productHandler.DeleteProduct)
 			products.GET("/my/listings", middleware.AuthMiddleware(), middleware.FarmerOnly(), productHandler.GetMyProducts)
 		}
@@ -74,6 +76,10 @@ func SetupRoutes() *gin.Engine {
 			orders.GET("/:id", orderHandler.GetOrder)
 			orders.GET("/my/orders", middleware.BuyerOnly(), orderHandler.GetMyOrders)
 			orders.GET("/farmer/orders", middleware.FarmerOnly(), orderHandler.GetFarmerOrders)
+			orders.GET("/farmer/payout-summary", middleware.FarmerOnly(), orderHandler.GetFarmerPayoutSummary)
+			orders.GET("/farmer/analytics", middleware.FarmerOnly(), orderHandler.GetFarmerAnalytics)
+			orders.GET("/farmer/notifications", middleware.FarmerOnly(), orderHandler.GetFarmerNotifications)
+			orders.GET("/:id/invoice", middleware.FarmerOnly(), orderHandler.GetFarmerInvoice)
 			orders.PUT("/:id/status", orderHandler.UpdateOrderStatus)
 			orders.DELETE("/:id", orderHandler.CancelOrder)
 		}

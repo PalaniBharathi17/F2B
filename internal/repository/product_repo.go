@@ -97,6 +97,18 @@ func (r *ProductRepository) Update(product *models.Product) error {
 	return r.db.Save(product).Error
 }
 
+func (r *ProductRepository) UpdateStatus(productID, farmerID uint, status string) error {
+	return r.db.Model(&models.Product{}).
+		Where("id = ? AND farmer_id = ?", productID, farmerID).
+		Update("status", status).Error
+}
+
+func (r *ProductRepository) BulkUpdateStatus(productIDs []uint, farmerID uint, status string) error {
+	return r.db.Model(&models.Product{}).
+		Where("id IN ? AND farmer_id = ?", productIDs, farmerID).
+		Update("status", status).Error
+}
+
 func (r *ProductRepository) Delete(id uint) error {
 	return r.db.Delete(&models.Product{}, id).Error
 }

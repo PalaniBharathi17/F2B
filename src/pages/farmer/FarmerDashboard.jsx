@@ -32,7 +32,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { getFarmerOrders } from '../../api/orders';
+import { getFarmerAnalytics, getFarmerNotifications, getFarmerOrders } from '../../api/orders';
 import { getMyListings } from '../../api/products';
 import './FarmerDashboard.css';
 
@@ -42,27 +42,36 @@ const { Title, Text, Paragraph } = Typography;
 const FarmerDashboard = () => {
     const [collapsed, setCollapsed] = useState(false);
     const [recentOrders, setRecentOrders] = useState([]);
+    const [listings, setListings] = useState([]);
     const [lowStockItems, setLowStockItems] = useState([]);
+    const [analytics, setAnalytics] = useState(null);
+    const [notifications, setNotifications] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const navigate = useNavigate();
     const { user, logout } = useAuth();
 
     useEffect(() => {
-        const loadOrders = async () => {
+        const loadDashboardData = async () => {
             try {
-                const data = await getFarmerOrders();
-                setRecentOrders(data?.orders || []);
-            } catch {
-                setRecentOrders([]);
-            }
-        };
-        const loadLowStock = async () => {
-            try {
-                const data = await getMyListings();
-                const low = (data?.products || [])
-                    .filter((p) => Number(p.quantity || 0) > 0)
+                const [ordersData, listingsData, analyticsData, notificationsData] = await Promise.all([
+                    getFarmerOrders(),
+                    getMyListings(),
+                    getFarmerAnalytics(),
+                    getFarmerNotifications(),
+                ]);
+
+                const orders = ordersData?.orders || [];
+                const products = listingsData?.products || [];
+
+                setRecentOrders(orders);
+                setListings(products);
+                setAnalytics(analyticsData?.summary || null);
+                setNotifications(notificationsData?.items || []);
+
+                const low = products
+                    .filter((p) => Number(p.quantity || 0) > 0 && Number(p.quantity || 0) <= 5)
                     .sort((a, b) => Number(a.quantity || 0) - Number(b.quantity || 0))
-                    .slice(0, 2)
+                    .slice(0, 4)
                     .map((p) => ({
                         id: p.id,
                         name: p.crop_name,
@@ -71,11 +80,15 @@ const FarmerDashboard = () => {
                     }));
                 setLowStockItems(low);
             } catch {
+                setRecentOrders([]);
+                setListings([]);
+                setAnalytics(null);
+                setNotifications([]);
                 setLowStockItems([]);
             }
         };
-        loadOrders();
-        loadLowStock();
+
+        loadDashboardData();
     }, []);
 
     const handleLogout = () => {
@@ -94,31 +107,28 @@ const FarmerDashboard = () => {
             })
             .slice(0, 8)
             .map((order) => ({
-            key: order.id,
-            date: new Date(order.created_at).toLocaleDateString(),
-            item: order?.product?.crop_name || 'Produce',
-            buyer: order?.buyer?.name || 'Buyer',
-            amount: `₹${Number(order.total_price || 0).toFixed(2)}`,
-            status: order.status,
-            image: order?.product?.image_url ? `http://localhost:8080${order.product.image_url}` : undefined,
+                key: order.id,
+                date: new Date(order.created_at).toLocaleDateString(),
+                item: order?.product?.crop_name || 'Produce',
+                buyer: order?.buyer?.name || 'Buyer',
+                amount: `INR ${Number(order.total_price || 0).toFixed(2)}`,
+                status: order.status,
+                image: order?.product?.image_url ? `http://localhost:8080${order.product.image_url}` : undefined,
             }))
     ), [recentOrders, searchQuery]);
 
-    const totalSales = recentOrders
-        .filter((order) => order.status === 'completed')
-        .reduce((sum, order) => sum + Number(order.total_price || 0), 0);
-    const activeListings = new Set(recentOrders.map((order) => order.product_id)).size;
+    const totalSales = analytics?.this_month_revenue
+        || recentOrders
+            .filter((order) => order.status === 'completed')
+            .reduce((sum, order) => sum + Number(order.total_price || 0), 0);
+    const activeListings = listings.filter((p) => p.status === 'active').length;
     const pendingOrders = recentOrders.filter((order) => order.status === 'pending').length;
-    const completedOrders = recentOrders.filter((order) => order.status === 'completed').length;
-    const salesTrend = recentOrders.length ? Math.round((completedOrders / recentOrders.length) * 100) : 0;
+    const completionRate = analytics?.completion_rate || 0;
     const pendingTrend = recentOrders.length ? Math.round((pendingOrders / recentOrders.length) * 100) : 0;
+    const topProduct = analytics?.top_products?.[0]?.product_name || 'No sales data yet';
 
     const columns = [
-        {
-            title: 'Date',
-            dataIndex: 'date',
-            key: 'date',
-        },
+        { title: 'Date', dataIndex: 'date', key: 'date' },
         {
             title: 'Item',
             dataIndex: 'item',
@@ -130,11 +140,7 @@ const FarmerDashboard = () => {
                 </Space>
             ),
         },
-        {
-            title: 'Buyer',
-            dataIndex: 'buyer',
-            key: 'buyer',
-        },
+        { title: 'Buyer', dataIndex: 'buyer', key: 'buyer' },
         {
             title: 'Amount',
             dataIndex: 'amount',
@@ -148,6 +154,8 @@ const FarmerDashboard = () => {
             render: (status) => {
                 const statusConfig = {
                     completed: { color: 'success', text: 'Completed' },
+                    out_for_delivery: { color: 'geekblue', text: 'Out For Delivery' },
+                    packed: { color: 'cyan', text: 'Packed' },
                     confirmed: { color: 'processing', text: 'Confirmed' },
                     pending: { color: 'warning', text: 'Pending' },
                     cancelled: { color: 'error', text: 'Cancelled' },
@@ -159,11 +167,22 @@ const FarmerDashboard = () => {
         {
             title: 'Action',
             key: 'action',
-            render: () => (
-                <Button type="text" icon={<MoreOutlined />} aria-label="More actions" />
-            ),
+            render: () => <Button type="text" icon={<MoreOutlined />} aria-label="More actions" />,
         },
     ];
+
+    const notificationMenuItems = notifications.length
+        ? notifications.slice(0, 8).map((item) => ({
+            key: item.id,
+            label: (
+                <div style={{ maxWidth: 320 }}>
+                    <Text strong>{item.title}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: '12px' }}>{item.message}</Text>
+                </div>
+            ),
+        }))
+        : [{ key: 'empty', label: <Text type="secondary">No new notifications</Text>, disabled: true }];
 
     const menuItems = [
         { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard', onClick: () => navigate('/farmer/dashboard') },
@@ -213,15 +232,12 @@ const FarmerDashboard = () => {
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                         />
-                        <Badge count={pendingOrders} offset={[-5, 5]}>
-                            <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
-                        </Badge>
-                        <Button
-                            type="primary"
-                            icon={<PlusOutlined />}
-                            className="add-produce-btn"
-                            onClick={() => navigate('/farmer/add-produce')}
-                        >
+                        <Dropdown menu={{ items: notificationMenuItems }} trigger={['click']}>
+                            <Badge count={notifications.length || pendingOrders} offset={[-5, 5]}>
+                                <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
+                            </Badge>
+                        </Dropdown>
+                        <Button type="primary" icon={<PlusOutlined />} className="add-produce-btn" onClick={() => navigate('/farmer/add-produce')}>
                             Add New Produce
                         </Button>
                         <Dropdown menu={{ items: [{ key: 'logout', label: 'Logout', icon: <LogoutOutlined />, onClick: handleLogout }] }}>
@@ -241,10 +257,10 @@ const FarmerDashboard = () => {
                             <Card className="stat-card stat-card-primary">
                                 <div className="stat-header">
                                     <div className="stat-icon stat-icon-primary"><ShoppingOutlined /></div>
-                                    <Tag color="success" className="stat-tag"><ArrowUpOutlined /> {salesTrend}%</Tag>
+                                    <Tag color="success" className="stat-tag"><ArrowUpOutlined /> {Math.round(completionRate)}%</Tag>
                                 </div>
-                                <Paragraph className="stat-label">Total Sales</Paragraph>
-                                <Title level={2} className="stat-value">₹{totalSales.toFixed(2)}</Title>
+                                <Paragraph className="stat-label">This Month Revenue</Paragraph>
+                                <Title level={2} className="stat-value">INR {totalSales.toFixed(2)}</Title>
                             </Card>
                         </Col>
                         <Col xs={24} sm={12} lg={8}>
@@ -298,12 +314,12 @@ const FarmerDashboard = () => {
                             <Card className="insights-card">
                                 <div className="insights-content">
                                     <TrophyOutlined style={{ fontSize: '48px', color: '#13ec13', marginBottom: '16px' }} />
-                                    <Title level={4}>Grow your reach!</Title>
+                                    <Title level={4}>Top product: {topProduct}</Title>
                                     <Paragraph>
-                                        You have {activeListings} active listing(s) and {pendingOrders} pending order(s).
-                                        Keep stock updated to improve buyer conversions.
+                                        Completion rate: {completionRate.toFixed(1)}%.
+                                        Average order value: INR {Number(analytics?.average_order_value || 0).toFixed(2)}.
                                     </Paragraph>
-                                    <Button type="primary" style={{ marginTop: '16px' }} onClick={() => navigate('/farmer/listings')}>Explore Insights</Button>
+                                    <Button type="primary" style={{ marginTop: '16px' }} onClick={() => navigate('/farmer/orders')}>Explore Insights</Button>
                                 </div>
                             </Card>
                         </Col>

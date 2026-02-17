@@ -192,3 +192,50 @@ func (h *ProductHandler) SearchProducts(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"products": products})
 }
+
+func (h *ProductHandler) UpdateProductStatus(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		return
+	}
+
+	var req service.UpdateProductStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	product, err := h.productService.UpdateProductStatus(uint(id), userIDUint, req.Status)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Product status updated successfully",
+		"product":  product,
+	})
+}
+
+func (h *ProductHandler) BulkUpdateProductStatus(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	var req service.BulkUpdateProductStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.productService.BulkUpdateProductStatus(userIDUint, req.ProductIDs, req.Status); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Products updated successfully",
+	})
+}

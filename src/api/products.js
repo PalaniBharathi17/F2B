@@ -29,3 +29,16 @@ export const getMyListings = async () => {
     const response = await apiClient.get('/products/my/listings');
     return response.data;
 };
+
+export const updateProductStatus = async (productId, status) => {
+    const response = await apiClient.patch(`/products/${productId}/status`, { status });
+    return response.data;
+};
+
+export const bulkUpdateProductStatus = async (productIds, status) => {
+    const response = await apiClient.patch('/products/bulk/status', {
+        product_ids: productIds,
+        status,
+    });
+    return response.data;
+};

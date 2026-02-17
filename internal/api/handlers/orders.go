@@ -89,15 +89,13 @@ func (h *OrderHandler) UpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		Status string `json:"status" binding:"required"`
-	}
+	var req service.UpdateOrderStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	order, err := h.orderService.UpdateOrderStatus(uint(id), userIDUint, req.Status)
+	order, err := h.orderService.UpdateOrderStatusWithDetails(uint(id), userIDUint, req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -124,4 +122,62 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Order cancelled successfully"})
+}
+
+func (h *OrderHandler) GetFarmerPayoutSummary(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	summary, err := h.orderService.GetFarmerPayoutSummary(userIDUint)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"summary": summary})
+}
+
+func (h *OrderHandler) GetFarmerInvoice(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+
+	invoice, err := h.orderService.GetFarmerInvoice(uint(id), userIDUint)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"invoice": invoice})
+}
+
+func (h *OrderHandler) GetFarmerAnalytics(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	summary, err := h.orderService.GetFarmerAnalytics(userIDUint)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"summary": summary})
+}
+
+func (h *OrderHandler) GetFarmerNotifications(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	items, err := h.orderService.GetFarmerNotifications(userIDUint)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": items})
 }

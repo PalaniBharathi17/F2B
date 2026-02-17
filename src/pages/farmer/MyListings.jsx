@@ -33,11 +33,18 @@ import {
     SearchOutlined,
     EditOutlined,
     DeleteOutlined,
-    EyeOutlined
+    EyeOutlined,
+    MoreOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { deleteProduct, getMyListings, updateProduct } from '../../api/products';
+import {
+    bulkUpdateProductStatus,
+    deleteProduct,
+    getMyListings,
+    updateProduct,
+    updateProductStatus
+} from '../../api/products';
 import { getFarmerOrders } from '../../api/orders';
 import './FarmerDashboard.css';
 
@@ -49,6 +56,10 @@ const MyListings = () => {
     const [listingsData, setListingsData] = useState([]);
     const [loading, setLoading] = useState(false);
     const [query, setQuery] = useState('');
+    const [stockFilter, setStockFilter] = useState('all');
+    const [sortBy, setSortBy] = useState('latest');
+    const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+    const [bulkSaving, setBulkSaving] = useState(false);
     const [pendingOrders, setPendingOrders] = useState(0);
     const [viewItem, setViewItem] = useState(null);
     const [editingItem, setEditingItem] = useState(null);
@@ -101,17 +112,34 @@ const MyListings = () => {
                     || String(item.id).includes(q)
                 );
             })
+            .filter((item) => {
+                if (stockFilter === 'low') return Number(item.quantity || 0) > 0 && Number(item.quantity || 0) <= 5;
+                if (stockFilter === 'out') return Number(item.quantity || 0) <= 0;
+                if (stockFilter === 'active') return item.status === 'active';
+                if (stockFilter === 'draft') return item.status === 'draft';
+                if (stockFilter === 'sold') return item.status === 'sold';
+                if (stockFilter === 'expired') return item.status === 'expired';
+                return true;
+            })
             .map((item) => ({
-            key: item.id,
-            name: item.crop_name,
-            category: item.city || 'Produce',
-            price: Number(item.price_per_unit || 0),
-            unit: item.unit || 'unit',
-            stock: Number(item.quantity || 0),
-            status: item.status || 'active',
-            image: item.image_url ? `http://localhost:8080${item.image_url}` : 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=100&h=100&fit=crop',
+                key: item.id,
+                name: item.crop_name,
+                category: item.city || 'Produce',
+                price: Number(item.price_per_unit || 0),
+                unit: item.unit || 'unit',
+                stock: Number(item.quantity || 0),
+                status: item.status || 'active',
+                createdAt: item.created_at,
+                image: item.image_url ? `http://localhost:8080${item.image_url}` : 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=100&h=100&fit=crop',
             }))
-    ), [listingsData, query]);
+            .sort((a, b) => {
+                if (sortBy === 'price_asc') return a.price - b.price;
+                if (sortBy === 'price_desc') return b.price - a.price;
+                if (sortBy === 'stock_asc') return a.stock - b.stock;
+                if (sortBy === 'stock_desc') return b.stock - a.stock;
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            })
+    ), [listingsData, query, stockFilter, sortBy]);
 
     const handleOpenEdit = (record) => {
         const item = listingsData.find((p) => p.id === record.key);
@@ -165,9 +193,38 @@ const MyListings = () => {
         }
     };
 
+    const handleStatusChange = async (record, status) => {
+        try {
+            await updateProductStatus(record.key, status);
+            message.success('Listing status updated successfully');
+            await loadListings();
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Failed to update listing status');
+        }
+    };
+
+    const handleBulkStatusChange = async (status) => {
+        if (!selectedRowKeys.length) {
+            message.warning('Select at least one listing');
+            return;
+        }
+        try {
+            setBulkSaving(true);
+            await bulkUpdateProductStatus(selectedRowKeys, status);
+            message.success('Listings updated successfully');
+            setSelectedRowKeys([]);
+            await loadListings();
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Failed to update listings');
+        } finally {
+            setBulkSaving(false);
+        }
+    };
+
     const totalProducts = tableData.length;
     const activeListings = tableData.filter((item) => item.status === 'active').length;
     const stockValue = tableData.reduce((sum, item) => sum + (item.price * item.stock), 0);
+    const lowStockCount = tableData.filter((item) => item.stock > 0 && item.stock <= 5).length;
 
     const columns = [
         {
@@ -190,7 +247,7 @@ const MyListings = () => {
             dataIndex: 'price',
             key: 'price',
             render: (price, record) => (
-                <Text strong>₹{price.toFixed(2)}<span style={{ fontWeight: 400, color: '#999' }}> / {record.unit}</span></Text>
+                <Text strong>INR {price.toFixed(2)}<span style={{ fontWeight: 400, color: '#999' }}> / {record.unit}</span></Text>
             )
         },
         {
@@ -207,7 +264,17 @@ const MyListings = () => {
                 let color = 'success';
                 if (status === 'sold') color = 'warning';
                 if (status === 'expired') color = 'error';
+                if (status === 'draft') color = 'default';
                 return <Tag color={color}>{status.toUpperCase()}</Tag>;
+            }
+        },
+        {
+            title: 'Alert',
+            key: 'alert',
+            render: (_, record) => {
+                if (record.stock <= 0) return <Tag color="error">OUT OF STOCK</Tag>;
+                if (record.stock <= 5) return <Tag color="warning">LOW STOCK</Tag>;
+                return <Tag color="success">IN STOCK</Tag>;
             }
         },
         {
@@ -217,6 +284,32 @@ const MyListings = () => {
                 <Space>
                     <Button type="text" icon={<EyeOutlined />} title="View details" onClick={() => setViewItem(listingsData.find((p) => p.id === record.key) || null)} />
                     <Button type="text" icon={<EditOutlined />} title="Edit listing" onClick={() => handleOpenEdit(record)} />
+                    <Dropdown
+                        menu={{
+                            items: [
+                                {
+                                    key: 'active',
+                                    label: 'Publish',
+                                    disabled: record.status === 'active',
+                                    onClick: () => handleStatusChange(record, 'active'),
+                                },
+                                {
+                                    key: 'draft',
+                                    label: 'Move to Draft',
+                                    disabled: record.status === 'draft' || record.status === 'sold',
+                                    onClick: () => handleStatusChange(record, 'draft'),
+                                },
+                                {
+                                    key: 'expired',
+                                    label: 'Mark Expired',
+                                    disabled: record.status === 'expired',
+                                    onClick: () => handleStatusChange(record, 'expired'),
+                                },
+                            ],
+                        }}
+                    >
+                        <Button type="text" icon={<MoreOutlined />} title="More actions" />
+                    </Dropdown>
                     <Popconfirm
                         title="Delete this listing?"
                         description="This action cannot be undone."
@@ -232,41 +325,15 @@ const MyListings = () => {
     ];
 
     const menuItems = [
-        {
-            key: 'dashboard',
-            icon: <DashboardOutlined />,
-            label: 'Dashboard',
-            onClick: () => navigate('/farmer/dashboard')
-        },
-        {
-            key: 'add-produce',
-            icon: <PlusOutlined />,
-            label: 'Add Produce',
-            onClick: () => navigate('/farmer/add-produce')
-        },
-        {
-            key: 'my-listings',
-            icon: <UnorderedListOutlined />,
-            label: 'My Listings',
-            onClick: () => navigate('/farmer/listings')
-        },
-        {
-            key: 'orders',
-            icon: <ShoppingOutlined />,
-            label: 'Orders',
-            onClick: () => navigate('/farmer/orders')
-        },
+        { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard', onClick: () => navigate('/farmer/dashboard') },
+        { key: 'add-produce', icon: <PlusOutlined />, label: 'Add Produce', onClick: () => navigate('/farmer/add-produce') },
+        { key: 'my-listings', icon: <UnorderedListOutlined />, label: 'My Listings', onClick: () => navigate('/farmer/listings') },
+        { key: 'orders', icon: <ShoppingOutlined />, label: 'Orders', onClick: () => navigate('/farmer/orders') },
     ];
 
     return (
         <Layout className="farmer-dashboard-layout">
-            <Sider
-                collapsible
-                collapsed={collapsed}
-                onCollapse={setCollapsed}
-                className="dashboard-sider"
-                width={260}
-            >
+            <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} className="dashboard-sider" width={260}>
                 <div className="logo-section">
                     <div className="logo-icon">
                         <ShoppingOutlined />
@@ -279,13 +346,7 @@ const MyListings = () => {
                     )}
                 </div>
 
-                <Menu
-                    theme="dark"
-                    selectedKeys={['my-listings']}
-                    mode="inline"
-                    items={menuItems}
-                    className="sidebar-menu"
-                />
+                <Menu theme="dark" selectedKeys={['my-listings']} mode="inline" items={menuItems} className="sidebar-menu" />
 
                 <div className="user-profile-section">
                     <div className="user-profile-card">
@@ -313,22 +374,41 @@ const MyListings = () => {
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                         />
+                        <Select
+                            value={stockFilter}
+                            onChange={setStockFilter}
+                            style={{ width: 150 }}
+                            options={[
+                                { value: 'all', label: 'All Stock' },
+                                { value: 'active', label: 'Active Only' },
+                                { value: 'draft', label: 'Draft' },
+                                { value: 'sold', label: 'Sold' },
+                                { value: 'expired', label: 'Expired' },
+                                { value: 'low', label: 'Low Stock' },
+                                { value: 'out', label: 'Out of Stock' },
+                            ]}
+                        />
+                        <Select
+                            value={sortBy}
+                            onChange={setSortBy}
+                            style={{ width: 170 }}
+                            options={[
+                                { value: 'latest', label: 'Newest First' },
+                                { value: 'price_asc', label: 'Price Low-High' },
+                                { value: 'price_desc', label: 'Price High-Low' },
+                                { value: 'stock_asc', label: 'Stock Low-High' },
+                                { value: 'stock_desc', label: 'Stock High-Low' },
+                            ]}
+                        />
                         <Badge count={pendingOrders} offset={[-5, 5]}>
                             <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
                         </Badge>
-                        <Button
-                            type="primary"
-                            icon={<PlusOutlined />}
-                            className="add-produce-btn"
-                            onClick={() => navigate('/farmer/add-produce')}
-                        >
+                        <Button type="primary" icon={<PlusOutlined />} className="add-produce-btn" onClick={() => navigate('/farmer/add-produce')}>
                             Add New Produce
                         </Button>
                         <Dropdown
                             menu={{
-                                items: [
-                                    { key: 'logout', label: 'Logout', icon: <LogoutOutlined />, onClick: handleLogout }
-                                ]
+                                items: [{ key: 'logout', label: 'Logout', icon: <LogoutOutlined />, onClick: handleLogout }]
                             }}
                         >
                             <Avatar icon={<UserOutlined />} aria-label="Account menu" src="https://i.pravatar.cc/150?img=12" style={{ cursor: 'pointer' }} />
@@ -338,25 +418,44 @@ const MyListings = () => {
 
                 <Content className="dashboard-content">
                     <Row gutter={[24, 24]} className="stats-row">
-                        <Col xs={24} sm={8}>
+                        <Col xs={24} sm={12} lg={6}>
                             <Card className="stat-card">
                                 <Statistic title="Total Products" value={totalProducts} prefix={<UnorderedListOutlined style={{ color: '#13ec13', marginRight: '8px' }} />} />
                             </Card>
                         </Col>
-                        <Col xs={24} sm={8}>
+                        <Col xs={24} sm={12} lg={6}>
                             <Card className="stat-card">
                                 <Statistic title="Active Listings" value={activeListings} valueStyle={{ color: '#52c41a' }} />
                             </Card>
                         </Col>
-                        <Col xs={24} sm={8}>
+                        <Col xs={24} sm={12} lg={6}>
                             <Card className="stat-card">
-                                <Statistic title="Stock Value" value={Number(stockValue.toFixed(2))} prefix="₹" />
+                                <Statistic title="Stock Value" value={Number(stockValue.toFixed(2))} prefix="INR " />
+                            </Card>
+                        </Col>
+                        <Col xs={24} sm={12} lg={6}>
+                            <Card className="stat-card">
+                                <Statistic title="Low Stock Alerts" value={lowStockCount} valueStyle={{ color: lowStockCount ? '#faad14' : '#52c41a' }} />
                             </Card>
                         </Col>
                     </Row>
 
-                    <Card className="activity-card" title="All Listings">
+                    <Card
+                        className="activity-card"
+                        title="All Listings"
+                        extra={(
+                            <Space>
+                                <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('active')}>Bulk Publish</Button>
+                                <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('draft')}>Bulk Draft</Button>
+                                <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('expired')}>Bulk Expire</Button>
+                            </Space>
+                        )}
+                    >
                         <Table
+                            rowSelection={{
+                                selectedRowKeys,
+                                onChange: setSelectedRowKeys,
+                            }}
                             columns={columns}
                             dataSource={tableData}
                             className="activity-table"
@@ -365,31 +464,19 @@ const MyListings = () => {
                     </Card>
                 </Content>
             </Layout>
-            <Modal
-                title="Listing Details"
-                open={Boolean(viewItem)}
-                onCancel={() => setViewItem(null)}
-                footer={null}
-            >
+            <Modal title="Listing Details" open={Boolean(viewItem)} onCancel={() => setViewItem(null)} footer={null}>
                 {viewItem && (
                     <Space direction="vertical" size="small" style={{ width: '100%' }}>
                         <Text><Text strong>Produce:</Text> {viewItem.crop_name}</Text>
                         <Text><Text strong>Quantity:</Text> {viewItem.quantity} {viewItem.unit}</Text>
-                        <Text><Text strong>Price:</Text> ₹{Number(viewItem.price_per_unit || 0).toFixed(2)} / {viewItem.unit}</Text>
+                        <Text><Text strong>Price:</Text> INR {Number(viewItem.price_per_unit || 0).toFixed(2)} / {viewItem.unit}</Text>
                         <Text><Text strong>Location:</Text> {[viewItem.city, viewItem.state].filter(Boolean).join(', ') || '-'}</Text>
                         <Text><Text strong>Status:</Text> {viewItem.status}</Text>
                         <Text><Text strong>Description:</Text> {viewItem.description || '-'}</Text>
                     </Space>
                 )}
             </Modal>
-            <Modal
-                title="Edit Listing"
-                open={Boolean(editingItem)}
-                onCancel={() => setEditingItem(null)}
-                onOk={handleUpdate}
-                confirmLoading={saving}
-                okText="Update"
-            >
+            <Modal title="Edit Listing" open={Boolean(editingItem)} onCancel={() => setEditingItem(null)} onOk={handleUpdate} confirmLoading={saving} okText="Update">
                 <Form form={form} layout="vertical">
                     <Form.Item label="Produce Name" name="name" rules={[{ required: true, message: 'Please enter produce name' }]}>
                         <Input />

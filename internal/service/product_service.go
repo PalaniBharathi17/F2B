@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/f2b-portal/backend/internal/models"
 	"github.com/f2b-portal/backend/internal/repository"
@@ -25,6 +26,24 @@ type CreateProductRequest struct {
 	City         string  `json:"city"`
 	State        string  `json:"state"`
 	ImageURL     string  `json:"image_url"`
+}
+
+type UpdateProductStatusRequest struct {
+	Status string `json:"status"`
+}
+
+type BulkUpdateProductStatusRequest struct {
+	ProductIDs []uint `json:"product_ids"`
+	Status     string `json:"status"`
+}
+
+func isAllowedProductStatus(status string) bool {
+	switch status {
+	case "active", "sold", "expired", "draft":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *ProductService) CreateProduct(farmerID uint, req CreateProductRequest) (*models.Product, error) {
@@ -99,6 +118,18 @@ func (s *ProductService) UpdateProduct(productID, farmerID uint, req CreateProdu
 	if product.FarmerID != farmerID {
 		return nil, errors.New("unauthorized: you can only update your own products")
 	}
+	if req.Quantity < 0 {
+		return nil, errors.New("quantity cannot be negative")
+	}
+	if req.PricePerUnit <= 0 {
+		return nil, errors.New("price per unit must be greater than 0")
+	}
+	if req.CropName == "" {
+		return nil, errors.New("crop name is required")
+	}
+	if req.Unit == "" {
+		return nil, errors.New("unit is required")
+	}
 
 	product.CropName = utils.SanitizeString(req.CropName)
 	product.Quantity = req.Quantity
@@ -110,12 +141,73 @@ func (s *ProductService) UpdateProduct(productID, farmerID uint, req CreateProdu
 	if req.ImageURL != "" {
 		product.ImageURL = req.ImageURL
 	}
+	if product.Quantity <= 0 {
+		product.Status = "sold"
+		product.Quantity = 0
+	} else if product.Status == "sold" {
+		product.Status = "active"
+	}
 
 	if err := s.productRepo.Update(product); err != nil {
 		return nil, errors.New("failed to update product")
 	}
 
 	return product, nil
+}
+
+func (s *ProductService) UpdateProductStatus(productID, farmerID uint, status string) (*models.Product, error) {
+	nextStatus := strings.ToLower(strings.TrimSpace(status))
+	if !isAllowedProductStatus(nextStatus) {
+		return nil, errors.New("invalid status")
+	}
+
+	product, err := s.productRepo.GetByID(productID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+	if product.FarmerID != farmerID {
+		return nil, errors.New("unauthorized: you can only update your own products")
+	}
+
+	if product.Quantity <= 0 && nextStatus == "active" {
+		return nil, errors.New("cannot mark as active when quantity is 0")
+	}
+	if product.Status == "sold" && nextStatus == "draft" {
+		return nil, errors.New("sold products cannot be moved to draft")
+	}
+
+	if err := s.productRepo.UpdateStatus(productID, farmerID, nextStatus); err != nil {
+		return nil, errors.New("failed to update product status")
+	}
+	return s.productRepo.GetByID(productID)
+}
+
+func (s *ProductService) BulkUpdateProductStatus(farmerID uint, productIDs []uint, status string) error {
+	nextStatus := strings.ToLower(strings.TrimSpace(status))
+	if !isAllowedProductStatus(nextStatus) {
+		return errors.New("invalid status")
+	}
+	if len(productIDs) == 0 {
+		return errors.New("product ids are required")
+	}
+
+	for _, id := range productIDs {
+		product, err := s.productRepo.GetByID(id)
+		if err != nil {
+			return errors.New("one or more products not found")
+		}
+		if product.FarmerID != farmerID {
+			return errors.New("unauthorized: you can only update your own products")
+		}
+		if product.Quantity <= 0 && nextStatus == "active" {
+			return errors.New("cannot mark out of stock products as active")
+		}
+	}
+
+	if err := s.productRepo.BulkUpdateStatus(productIDs, farmerID, nextStatus); err != nil {
+		return errors.New("failed to update products")
+	}
+	return nil
 }
 
 func (s *ProductService) DeleteProduct(productID, farmerID uint) error {
