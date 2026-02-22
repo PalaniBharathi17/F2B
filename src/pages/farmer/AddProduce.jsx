@@ -86,6 +86,7 @@ const AddProduce = () => {
 
             await createProduct({
                 crop_name: values.name,
+                category: values.category,
                 quantity: Number(values.quantity),
                 unit: values.unit,
                 price_per_unit: Number(values.price),

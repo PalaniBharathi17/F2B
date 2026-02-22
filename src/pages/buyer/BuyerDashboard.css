@@ -53,6 +53,8 @@
     display: flex;
     align-items: center;
     gap: 16px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .nav-link {
@@ -135,6 +137,7 @@
     padding: 32px;
     max-width: 1440px;
     margin: 0 auto;
+    width: 100%;
 }
 
 .content-header {
@@ -280,6 +283,105 @@
     box-shadow: 0 4px 12px rgba(19, 236, 19, 0.3) !important;
 }
 
+/* Table safety for buyer pages */
+.buyer-orders-card {
+    overflow: visible !important;
+}
+
+.buyer-orders-card .ant-card-body {
+    overflow-x: auto;
+}
+
+.buyer-content .ant-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.buyer-table-actions {
+    row-gap: 4px;
+}
+
+.stat-card {
+    border-radius: 14px !important;
+}
+
+/* Cart layout safety */
+.buyer-cart-list {
+    overflow: visible !important;
+}
+
+.buyer-cart-item {
+    padding: 24px 0;
+    display: flex;
+    gap: 24px;
+    align-items: center;
+}
+
+.buyer-cart-item-image {
+    width: 100px;
+    height: 100px;
+    border-radius: 12px;
+    object-fit: cover;
+    flex: 0 0 auto;
+}
+
+.buyer-cart-item-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.buyer-cart-item-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.buyer-cart-item-meta {
+    margin-top: 16px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
+/* Farmer list polish */
+.farmer-card {
+    padding: 8px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fff9 100%);
+}
+
+.farmer-top {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+
+.farmer-meta {
+    flex: 1;
+    min-width: 0;
+}
+
+.farmer-meta h4 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.farmer-stats {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(16, 34, 16, 0.12);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.farmer-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 /* Pagination */
 .pagination-section {
     display: flex;
@@ -326,5 +428,36 @@
 
     .content-header h2 {
         font-size: 24px !important;
+    }
+
+    .header-actions-buyer {
+        gap: 8px;
+    }
+
+    .buyer-cart-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .buyer-cart-item-image {
+        width: 100%;
+        max-width: 220px;
+        height: 140px;
+    }
+
+    .buyer-cart-item-meta {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .farmer-stats {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .farmer-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 }

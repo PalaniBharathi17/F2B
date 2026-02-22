@@ -18,7 +18,13 @@ type Order struct {
 	TotalPrice         float64        `gorm:"not null" json:"total_price"`
 	Status             string         `gorm:"default:'pending'" json:"status"` // pending/confirmed/packed/out_for_delivery/completed/cancelled
 	DeliveryAddress    string         `json:"delivery_address"`
+	DeliveryDate       *time.Time     `json:"delivery_date"`
+	DeliverySlot       string         `json:"delivery_slot"`
 	CancellationReason string         `json:"cancellation_reason"`
+	CancellationType   string         `json:"cancellation_type"`
+	CancellationNote   string         `json:"cancellation_note"`
+	DisputeStatus      string         `gorm:"default:'none';index" json:"dispute_status"` // none/open/resolved/rejected
+	DisputeNote        string         `json:"dispute_note"`
 	ConfirmedAt        *time.Time     `json:"confirmed_at"`
 	PackedAt           *time.Time     `json:"packed_at"`
 	OutForDeliveryAt   *time.Time     `json:"out_for_delivery_at"`
@@ -29,5 +35,6 @@ type Order struct {
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// Relationships
-	Reviews []Review `gorm:"foreignKey:OrderID" json:"reviews,omitempty"`
+	Reviews    []Review         `gorm:"foreignKey:OrderID" json:"reviews,omitempty"`
+	StatusLogs []OrderStatusLog `gorm:"foreignKey:OrderID" json:"status_logs,omitempty"`
 }

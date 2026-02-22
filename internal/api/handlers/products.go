@@ -67,6 +67,9 @@ func (h *ProductHandler) GetAllProducts(c *gin.Context) {
 	if state := c.Query("state"); state != "" {
 		filters["state"] = state
 	}
+	if category := c.Query("category"); category != "" {
+		filters["category"] = category
+	}
 	if minPriceStr := c.Query("min_price"); minPriceStr != "" {
 		if minPrice, err := strconv.ParseFloat(minPriceStr, 64); err == nil {
 			filters["min_price"] = minPrice
@@ -79,6 +82,11 @@ func (h *ProductHandler) GetAllProducts(c *gin.Context) {
 	}
 	if status := c.Query("status"); status != "" {
 		filters["status"] = status
+	}
+	if farmerIDStr := c.Query("farmer_id"); farmerIDStr != "" {
+		if farmerID, err := strconv.ParseUint(farmerIDStr, 10, 32); err == nil && farmerID > 0 {
+			filters["farmer_id"] = uint(farmerID)
+		}
 	}
 	if sortBy := c.Query("sort_by"); sortBy != "" {
 		filters["sort_by"] = sortBy
@@ -216,7 +224,7 @@ func (h *ProductHandler) UpdateProductStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Product status updated successfully",
-		"product":  product,
+		"product": product,
 	})
 }
 
@@ -238,4 +246,70 @@ func (h *ProductHandler) BulkUpdateProductStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Products updated successfully",
 	})
+}
+
+func (h *ProductHandler) UpdateProductPrice(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		return
+	}
+
+	var req service.UpdateProductPriceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	product, err := h.productService.UpdateProductPrice(uint(id), userIDUint, req.PricePerUnit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Product price updated successfully",
+		"product": product,
+	})
+}
+
+func (h *ProductHandler) DuplicateProduct(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		return
+	}
+
+	product, err := h.productService.DuplicateProduct(uint(id), userIDUint)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Product duplicated successfully",
+		"product": product,
+	})
+}
+
+func (h *ProductHandler) GetProductPriceHistory(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product ID"})
+		return
+	}
+
+	history, err := h.productService.GetProductPriceHistory(uint(id), userIDUint)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"history": history})
 }

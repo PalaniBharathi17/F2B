@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"strings"
+
 	"github.com/f2b-portal/backend/internal/models"
 	"gorm.io/gorm"
 )
@@ -42,6 +44,10 @@ func (r *ProductRepository) GetAll(filters map[string]interface{}, page, limit i
 	if state, ok := filters["state"].(string); ok && state != "" {
 		query = query.Where("LOWER(state) = ?", state)
 	}
+	if category, ok := filters["category"].(string); ok && strings.TrimSpace(category) != "" {
+		cat := strings.ToLower(strings.TrimSpace(category))
+		query = query.Where("(LOWER(category) = ? OR LOWER(description) LIKE ?)", cat, "%category: "+cat+"%")
+	}
 	if minPrice, ok := filters["min_price"].(float64); ok {
 		query = query.Where("price_per_unit >= ?", minPrice)
 	}
@@ -52,6 +58,9 @@ func (r *ProductRepository) GetAll(filters map[string]interface{}, page, limit i
 		query = query.Where("status = ?", status)
 	} else {
 		query = query.Where("status = ?", "active")
+	}
+	if farmerID, ok := filters["farmer_id"].(uint); ok && farmerID > 0 {
+		query = query.Where("farmer_id = ?", farmerID)
 	}
 
 	// Get total count
@@ -129,4 +138,14 @@ func (r *ProductRepository) ListAllForAdmin() ([]models.Product, error) {
 		Order("created_at DESC").
 		Find(&products).Error
 	return products, err
+}
+
+func (r *ProductRepository) CreatePriceHistory(item *models.ProductPriceHistory) error {
+	return r.db.Create(item).Error
+}
+
+func (r *ProductRepository) GetPriceHistoryByProduct(productID uint) ([]models.ProductPriceHistory, error) {
+	var history []models.ProductPriceHistory
+	err := r.db.Where("product_id = ?", productID).Order("changed_at DESC").Find(&history).Error
+	return history, err
 }

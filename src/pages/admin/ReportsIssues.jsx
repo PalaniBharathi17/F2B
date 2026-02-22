@@ -12,7 +12,7 @@ import {
     Progress,
     List,
     Row,
-    Col
+    Col,
 } from 'antd';
 import {
     DashboardOutlined,
@@ -24,7 +24,7 @@ import {
     LogoutOutlined,
     SafetyCertificateOutlined,
     ClockCircleOutlined,
-    MessageOutlined
+    MessageOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -47,11 +47,15 @@ const ReportsIssues = () => {
                 const [data, overview] = await Promise.all([getAdminReports(), getAdminOverview()]);
                 const mapped = (data?.items || []).map((o) => ({
                     id: String(o.id),
-                    type: o.status === 'cancelled' ? 'Order Dispute' : 'Verification',
-                    user: o?.buyer?.name || 'User',
-                    issue: `Order #${o.id} for ${o?.product?.crop_name || 'produce'} is ${o.status}`,
+                    type: o.type || 'Order Issue',
+                    user: o.buyer_name || 'User',
+                    issue: o.issue || `Order #${o.id} issue`,
                     date: new Date(o.updated_at || o.created_at).toLocaleString(),
-                    priority: o.status === 'cancelled' ? 'High' : 'Medium'
+                    priority: o.priority || 'Medium',
+                    slaHours: Number(o.sla_hours || 0),
+                    elapsedHours: Number(o.elapsed_hours || 0),
+                    slaBreached: Boolean(o.sla_breached),
+                    resolutionState: o.resolution_state || 'Open',
                 }));
                 setDisputes(mapped);
                 setStats(overview?.stats || null);
@@ -84,9 +88,27 @@ const ReportsIssues = () => {
     return (
         <Layout className="admin-dashboard-layout">
             <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} className="admin-sider" width={260}>
-                <div className="logo-section-admin"><div className="logo-icon-admin"><SafetyCertificateOutlined /></div>{!collapsed && <div><Title level={5} style={{ margin: 0, color: 'white' }}>AgriMarket</Title><Text style={{ fontSize: '12px', color: 'rgba(255,255,255,0.65)' }}>Admin Console</Text></div>}</div>
+                <div className="logo-section-admin">
+                    <div className="logo-icon-admin"><SafetyCertificateOutlined /></div>
+                    {!collapsed && (
+                        <div>
+                            <Title level={5} style={{ margin: 0, color: 'white' }}>AgriMarket</Title>
+                            <Text style={{ fontSize: '12px', color: 'rgba(255,255,255,0.65)' }}>Admin Console</Text>
+                        </div>
+                    )}
+                </div>
                 <Menu theme="dark" selectedKeys={['reports']} mode="inline" items={menuItems} className="admin-menu" />
-                <div className="admin-profile-section"><div className="admin-profile-card"><Avatar size={40} icon={<UserOutlined />} />{!collapsed && <div className="admin-info"><Text strong style={{ color: 'white', fontSize: '14px' }}>Admin User</Text><Tag color="purple" style={{ fontSize: '10px', padding: '0 6px' }}>SUPER ADMIN</Tag></div>}</div></div>
+                <div className="admin-profile-section">
+                    <div className="admin-profile-card">
+                        <Avatar size={40} icon={<UserOutlined />} />
+                        {!collapsed && (
+                            <div className="admin-info">
+                                <Text strong style={{ color: 'white', fontSize: '14px' }}>Admin User</Text>
+                                <Tag color="purple" style={{ fontSize: '10px', padding: '0 6px' }}>SUPER ADMIN</Tag>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </Sider>
 
             <Layout>
@@ -111,13 +133,31 @@ const ReportsIssues = () => {
                                         <List.Item
                                             actions={[
                                                 <Button size="small" key={`view-${item.id}`}>View Detail</Button>,
-                                                <Button size="small" type="primary" key={`resolve-${item.id}`} style={{ background: '#52c41a', borderColor: '#52c41a' }}>Resolve</Button>
+                                                <Button size="small" type="primary" key={`resolve-${item.id}`} style={{ background: '#52c41a', borderColor: '#52c41a' }}>Resolve</Button>,
                                             ]}
                                         >
                                             <List.Item.Meta
                                                 avatar={<Avatar icon={<UserOutlined />} />}
-                                                title={<Space><Text strong>{item.type}</Text><Tag color={item.priority === 'High' ? 'red' : item.priority === 'Medium' ? 'orange' : 'blue'}>{item.priority} Priority</Tag></Space>}
-                                                description={<div><Paragraph ellipsis={{ rows: 1 }} style={{ margin: 0 }}>{item.issue}</Paragraph><Text type="secondary" style={{ fontSize: '12px' }}><ClockCircleOutlined /> {item.date} • Reported by: {item.user}</Text></div>}
+                                                title={(
+                                                    <Space>
+                                                        <Text strong>{item.type}</Text>
+                                                        <Tag color={item.priority === 'High' ? 'red' : item.priority === 'Medium' ? 'orange' : 'blue'}>
+                                                            {item.priority} Priority
+                                                        </Tag>
+                                                    </Space>
+                                                )}
+                                                description={(
+                                                    <div>
+                                                        <Paragraph ellipsis={{ rows: 1 }} style={{ margin: 0 }}>{item.issue}</Paragraph>
+                                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                                            <ClockCircleOutlined /> {item.date} | Reported by: {item.user}
+                                                        </Text>
+                                                        <br />
+                                                        <Text type={item.slaBreached ? 'danger' : 'secondary'} style={{ fontSize: '12px' }}>
+                                                            SLA: {item.elapsedHours}h / {item.slaHours}h | {item.resolutionState}{item.slaBreached ? ' | BREACHED' : ''}
+                                                        </Text>
+                                                    </div>
+                                                )}
                                             />
                                         </List.Item>
                                     )}

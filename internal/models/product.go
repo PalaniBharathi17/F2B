@@ -11,6 +11,7 @@ type Product struct {
 	FarmerID     uint           `gorm:"not null" json:"farmer_id"`
 	Farmer       User           `gorm:"foreignKey:FarmerID" json:"farmer,omitempty"`
 	CropName     string         `gorm:"not null;index" json:"crop_name"`
+	Category     string         `gorm:"index" json:"category"`
 	Quantity     float64        `gorm:"not null" json:"quantity"`
 	Unit         string         `gorm:"not null" json:"unit"` // kg, quintal, ton
 	PricePerUnit float64        `gorm:"not null" json:"price_per_unit"`

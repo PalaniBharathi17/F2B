@@ -41,8 +41,11 @@ import { useAuth } from '../../context/AuthContext';
 import {
     bulkUpdateProductStatus,
     deleteProduct,
+    duplicateProduct,
+    getProductPriceHistory,
     getMyListings,
     updateProduct,
+    updateProductPrice,
     updateProductStatus
 } from '../../api/products';
 import { getFarmerOrders } from '../../api/orders';
@@ -64,7 +67,15 @@ const MyListings = () => {
     const [viewItem, setViewItem] = useState(null);
     const [editingItem, setEditingItem] = useState(null);
     const [saving, setSaving] = useState(false);
+    const [priceModalOpen, setPriceModalOpen] = useState(false);
+    const [priceTargetItem, setPriceTargetItem] = useState(null);
+    const [priceSaving, setPriceSaving] = useState(false);
+    const [priceHistoryOpen, setPriceHistoryOpen] = useState(false);
+    const [priceHistory, setPriceHistory] = useState([]);
+    const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
+    const [actionProductId, setActionProductId] = useState(null);
     const [form] = Form.useForm();
+    const [priceForm] = Form.useForm();
     const navigate = useNavigate();
     const { user, logout } = useAuth();
 
@@ -124,7 +135,7 @@ const MyListings = () => {
             .map((item) => ({
                 key: item.id,
                 name: item.crop_name,
-                category: item.city || 'Produce',
+                category: item.category || 'Produce',
                 price: Number(item.price_per_unit || 0),
                 unit: item.unit || 'unit',
                 stock: Number(item.quantity || 0),
@@ -144,9 +155,22 @@ const MyListings = () => {
     const handleOpenEdit = (record) => {
         const item = listingsData.find((p) => p.id === record.key);
         if (!item) return;
+        const desc = String(item.description || '').toLowerCase();
+        const fallbackCategory = desc.includes('category: fruits')
+            ? 'fruits'
+            : desc.includes('category: vegetables')
+                ? 'vegetables'
+                : desc.includes('category: grains')
+                    ? 'grains'
+                    : desc.includes('category: dairy')
+                        ? 'dairy'
+                        : desc.includes('category: honey')
+                            ? 'honey'
+                            : '';
         setEditingItem(item);
         form.setFieldsValue({
             name: item.crop_name,
+            category: item.category || fallbackCategory,
             quantity: Number(item.quantity || 0),
             price: Number(item.price_per_unit || 0),
             unit: item.unit || 'kg',
@@ -164,6 +188,7 @@ const MyListings = () => {
             setSaving(true);
             await updateProduct(editingItem.id, {
                 crop_name: values.name,
+                category: values.category || '',
                 quantity: Number(values.quantity),
                 unit: values.unit,
                 price_per_unit: Number(values.price),
@@ -185,21 +210,27 @@ const MyListings = () => {
 
     const handleDelete = async (record) => {
         try {
+            setActionProductId(record.key);
             await deleteProduct(record.key);
             message.success('Listing deleted successfully');
             await loadListings();
         } catch (error) {
             message.error(error?.response?.data?.error || 'Failed to delete listing');
+        } finally {
+            setActionProductId(null);
         }
     };
 
     const handleStatusChange = async (record, status) => {
         try {
+            setActionProductId(record.key);
             await updateProductStatus(record.key, status);
             message.success('Listing status updated successfully');
             await loadListings();
         } catch (error) {
             message.error(error?.response?.data?.error || 'Failed to update listing status');
+        } finally {
+            setActionProductId(null);
         }
     };
 
@@ -218,6 +249,59 @@ const MyListings = () => {
             message.error(error?.response?.data?.error || 'Failed to update listings');
         } finally {
             setBulkSaving(false);
+        }
+    };
+
+    const openPriceModal = (record) => {
+        const item = listingsData.find((p) => p.id === record.key);
+        if (!item) return;
+        setPriceTargetItem(item);
+        priceForm.setFieldsValue({ price: Number(item.price_per_unit || 0) });
+        setPriceModalOpen(true);
+    };
+
+    const handleQuickPriceUpdate = async () => {
+        if (!priceTargetItem) return;
+        try {
+            const values = await priceForm.validateFields();
+            setPriceSaving(true);
+            await updateProductPrice(priceTargetItem.id, Number(values.price));
+            message.success('Price updated successfully');
+            setPriceModalOpen(false);
+            setPriceTargetItem(null);
+            priceForm.resetFields();
+            await loadListings();
+        } catch (error) {
+            if (error?.errorFields) return;
+            message.error(error?.response?.data?.error || 'Failed to update price');
+        } finally {
+            setPriceSaving(false);
+        }
+    };
+
+    const handleDuplicateListing = async (record) => {
+        try {
+            setActionProductId(record.key);
+            await duplicateProduct(record.key);
+            message.success('Listing duplicated as draft');
+            await loadListings();
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Failed to duplicate listing');
+        } finally {
+            setActionProductId(null);
+        }
+    };
+
+    const openPriceHistory = async (record) => {
+        try {
+            setPriceHistoryOpen(true);
+            setPriceHistoryLoading(true);
+            const data = await getProductPriceHistory(record.key);
+            setPriceHistory(data?.history || []);
+        } catch {
+            setPriceHistory([]);
+        } finally {
+            setPriceHistoryLoading(false);
         }
     };
 
@@ -283,32 +367,35 @@ const MyListings = () => {
             render: (_, record) => (
                 <Space>
                     <Button type="text" icon={<EyeOutlined />} title="View details" onClick={() => setViewItem(listingsData.find((p) => p.id === record.key) || null)} />
-                    <Button type="text" icon={<EditOutlined />} title="Edit listing" onClick={() => handleOpenEdit(record)} />
+                    <Button type="text" icon={<EditOutlined />} title="Edit listing" onClick={() => handleOpenEdit(record)} disabled={actionProductId === record.key} />
+                    <Button type="text" onClick={() => openPriceModal(record)} title="Quick price update" disabled={actionProductId === record.key}>Price</Button>
+                    <Button type="text" onClick={() => handleDuplicateListing(record)} title="Duplicate listing" loading={actionProductId === record.key}>Duplicate</Button>
+                    <Button type="text" onClick={() => openPriceHistory(record)} title="Price history" disabled={actionProductId === record.key}>History</Button>
                     <Dropdown
                         menu={{
                             items: [
                                 {
                                     key: 'active',
                                     label: 'Publish',
-                                    disabled: record.status === 'active',
+                                    disabled: record.status === 'active' || actionProductId === record.key,
                                     onClick: () => handleStatusChange(record, 'active'),
                                 },
                                 {
                                     key: 'draft',
                                     label: 'Move to Draft',
-                                    disabled: record.status === 'draft' || record.status === 'sold',
+                                    disabled: record.status === 'draft' || record.status === 'sold' || actionProductId === record.key,
                                     onClick: () => handleStatusChange(record, 'draft'),
                                 },
                                 {
                                     key: 'expired',
                                     label: 'Mark Expired',
-                                    disabled: record.status === 'expired',
+                                    disabled: record.status === 'expired' || actionProductId === record.key,
                                     onClick: () => handleStatusChange(record, 'expired'),
                                 },
                             ],
                         }}
                     >
-                        <Button type="text" icon={<MoreOutlined />} title="More actions" />
+                        <Button type="text" icon={<MoreOutlined />} title="More actions" loading={actionProductId === record.key} />
                     </Dropdown>
                     <Popconfirm
                         title="Delete this listing?"
@@ -317,7 +404,7 @@ const MyListings = () => {
                         okText="Delete"
                         cancelText="Cancel"
                     >
-                        <Button type="text" danger icon={<DeleteOutlined />} title="Delete listing" />
+                        <Button type="text" danger icon={<DeleteOutlined />} title="Delete listing" loading={actionProductId === record.key} />
                     </Popconfirm>
                 </Space>
             ),
@@ -495,6 +582,19 @@ const MyListings = () => {
                     </Row>
                     <Row gutter={12}>
                         <Col span={12}>
+                            <Form.Item label="Category" name="category" rules={[{ required: true, message: 'Required' }]}>
+                                <Select
+                                    options={[
+                                        { value: 'vegetables', label: 'Vegetables' },
+                                        { value: 'fruits', label: 'Fruits' },
+                                        { value: 'grains', label: 'Grains' },
+                                        { value: 'dairy', label: 'Dairy & Eggs' },
+                                        { value: 'honey', label: 'Honey & Preserves' },
+                                    ]}
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
                             <Form.Item label="Unit" name="unit" rules={[{ required: true, message: 'Required' }]}>
                                 <Select
                                     options={[
@@ -536,6 +636,48 @@ const MyListings = () => {
                         <Input.TextArea rows={3} />
                     </Form.Item>
                 </Form>
+            </Modal>
+            <Modal
+                title="Quick Price Update"
+                open={priceModalOpen}
+                onCancel={() => {
+                    setPriceModalOpen(false);
+                    setPriceTargetItem(null);
+                    priceForm.resetFields();
+                }}
+                onOk={handleQuickPriceUpdate}
+                confirmLoading={priceSaving}
+                okText="Update Price"
+            >
+                <Form form={priceForm} layout="vertical">
+                    <Form.Item
+                        label="Price (INR)"
+                        name="price"
+                        rules={[
+                            { required: true, message: 'Price is required' },
+                            { type: 'number', min: 0.1, message: 'Price must be greater than 0' },
+                        ]}
+                    >
+                        <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} />
+                    </Form.Item>
+                </Form>
+            </Modal>
+            <Modal title="Price History" open={priceHistoryOpen} onCancel={() => setPriceHistoryOpen(false)} footer={null}>
+                <Table
+                    loading={priceHistoryLoading}
+                    dataSource={priceHistory.map((item) => ({
+                        key: item.id,
+                        changedAt: new Date(item.changed_at).toLocaleString(),
+                        oldPrice: Number(item.old_price || 0).toFixed(2),
+                        newPrice: Number(item.new_price || 0).toFixed(2),
+                    }))}
+                    pagination={false}
+                    columns={[
+                        { title: 'Changed At', dataIndex: 'changedAt', key: 'changedAt' },
+                        { title: 'Old Price', dataIndex: 'oldPrice', key: 'oldPrice', render: (p) => `INR ${p}` },
+                        { title: 'New Price', dataIndex: 'newPrice', key: 'newPrice', render: (p) => `INR ${p}` },
+                    ]}
+                />
             </Modal>
         </Layout>
     );

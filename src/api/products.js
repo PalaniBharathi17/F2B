@@ -42,3 +42,20 @@ export const bulkUpdateProductStatus = async (productIds, status) => {
     });
     return response.data;
 };
+
+export const updateProductPrice = async (productId, pricePerUnit) => {
+    const response = await apiClient.patch(`/products/${productId}/price`, {
+        price_per_unit: pricePerUnit,
+    });
+    return response.data;
+};
+
+export const duplicateProduct = async (productId) => {
+    const response = await apiClient.post(`/products/${productId}/duplicate`);
+    return response.data;
+};
+
+export const getProductPriceHistory = async (productId) => {
+    const response = await apiClient.get(`/products/${productId}/price-history`);
+    return response.data;
+};

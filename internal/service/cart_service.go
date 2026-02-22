@@ -2,10 +2,13 @@ package service
 
 import (
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/f2b-portal/backend/internal/models"
 	"github.com/f2b-portal/backend/internal/repository"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CartService struct {
@@ -49,9 +52,15 @@ func (s *CartService) AddToCart(buyerID uint, req AddToCartRequest) error {
 	if product.FarmerID == buyerID {
 		return errors.New("you cannot add your own product")
 	}
+	if product.Quantity < req.Quantity {
+		return errors.New("requested quantity exceeds available stock")
+	}
 
 	existing, err := s.cartRepo.GetByBuyerAndProduct(buyerID, req.ProductID)
 	if err == nil {
+		if product.Quantity < (existing.Quantity + req.Quantity) {
+			return errors.New("requested quantity exceeds available stock")
+		}
 		existing.Quantity += req.Quantity
 		return s.cartRepo.Update(existing)
 	}
@@ -86,6 +95,12 @@ func (s *CartService) UpdateQuantity(buyerID, cartItemID uint, quantity float64)
 	if target == nil {
 		return errors.New("cart item not found")
 	}
+	if target.Product.Status != "active" {
+		return errors.New("product is not available")
+	}
+	if quantity > target.Product.Quantity {
+		return errors.New("requested quantity exceeds available stock")
+	}
 
 	target.Quantity = quantity
 	return s.cartRepo.Update(target)
@@ -111,46 +126,77 @@ func (s *CartService) RemoveItem(buyerID, cartItemID uint) error {
 }
 
 func (s *CartService) Checkout(buyerID uint, deliveryAddress string) ([]models.Order, error) {
-	items, err := s.cartRepo.GetItemsByBuyerID(buyerID)
+	cleanAddress := strings.TrimSpace(deliveryAddress)
+	createdOrderIDs := make([]uint, 0)
+
+	err := s.orderRepo.GetDB().Transaction(func(tx *gorm.DB) error {
+		var items []models.CartItem
+		if err := tx.Preload("Product").
+			Where("buyer_id = ?", buyerID).
+			Order("updated_at DESC").
+			Find(&items).Error; err != nil {
+			return errors.New("failed to load cart")
+		}
+		if len(items) == 0 {
+			return errors.New("cart is empty")
+		}
+
+		for _, item := range items {
+			var product models.Product
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ?", item.ProductID).
+				First(&product).Error; err != nil {
+				return errors.New("product not found during checkout")
+			}
+			if product.Status != "active" {
+				return errors.New("one or more products are no longer available")
+			}
+			if product.Quantity < item.Quantity {
+				return errors.New("insufficient quantity for one or more products")
+			}
+
+			order := &models.Order{
+				ProductID:       product.ID,
+				BuyerID:         buyerID,
+				FarmerID:        product.FarmerID,
+				Quantity:        item.Quantity,
+				TotalPrice:      item.Quantity * product.PricePerUnit,
+				Status:          "pending",
+				DeliveryAddress: cleanAddress,
+				CreatedAt:       time.Now().UTC(),
+				UpdatedAt:       time.Now().UTC(),
+			}
+			if err := tx.Create(order).Error; err != nil {
+				return errors.New("failed to create order")
+			}
+			createdOrderIDs = append(createdOrderIDs, order.ID)
+
+			product.Quantity -= item.Quantity
+			if product.Quantity <= 0 {
+				product.Quantity = 0
+				product.Status = "sold"
+			}
+			if err := tx.Save(&product).Error; err != nil {
+				return errors.New("failed to update inventory")
+			}
+		}
+
+		if err := tx.Where("buyer_id = ?", buyerID).Delete(&models.CartItem{}).Error; err != nil {
+			return errors.New("orders created but failed to clear cart")
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, errors.New("failed to load cart")
-	}
-	if len(items) == 0 {
-		return nil, errors.New("cart is empty")
+		return nil, err
 	}
 
-	createdOrders := make([]models.Order, 0, len(items))
-
-	for _, item := range items {
-		product, err := s.productRepo.GetByID(item.ProductID)
-		if err != nil {
-			return nil, errors.New("product not found during checkout")
-		}
-		if product.Status != "active" {
-			return nil, errors.New("one or more products are no longer available")
-		}
-		if product.Quantity < item.Quantity {
-			return nil, errors.New("insufficient quantity for one or more products")
-		}
-
-		order := &models.Order{
-			ProductID:       product.ID,
-			BuyerID:         buyerID,
-			FarmerID:        product.FarmerID,
-			Quantity:        item.Quantity,
-			TotalPrice:      item.Quantity * product.PricePerUnit,
-			Status:          "pending",
-			DeliveryAddress: deliveryAddress,
-		}
-		if err := s.orderRepo.Create(order); err != nil {
-			return nil, errors.New("failed to create order")
+	createdOrders := make([]models.Order, 0, len(createdOrderIDs))
+	for _, orderID := range createdOrderIDs {
+		order, getErr := s.orderRepo.GetByID(orderID)
+		if getErr != nil {
+			return nil, errors.New("failed to load created orders")
 		}
 		createdOrders = append(createdOrders, *order)
 	}
-
-	if err := s.cartRepo.DeleteByBuyerID(buyerID); err != nil {
-		return nil, errors.New("orders created but failed to clear cart")
-	}
-
 	return createdOrders, nil
 }

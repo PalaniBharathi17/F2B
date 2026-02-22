@@ -20,6 +20,7 @@ import {
     Modal,
     Form,
     Select,
+    DatePicker,
 } from 'antd';
 import {
     DashboardOutlined,
@@ -40,7 +41,17 @@ import {
     getFarmerOrders,
     getFarmerPayoutSummary,
     getFarmerInvoice,
+    getFarmerDisputes,
     updateOrderStatus,
+    updateOrderStatusDetailed,
+    getFarmerReviews,
+    getOrderStatusHistory,
+    openDispute,
+    resolveDispute,
+    rejectDispute,
+    getFarmerWeeklySummary,
+    getFarmerMonthlySummary,
+    exportFarmerReport,
 } from '../../api/orders';
 import './FarmerDashboard.css';
 
@@ -58,6 +69,22 @@ const FarmerOrders = () => {
     const [cancelModalOpen, setCancelModalOpen] = useState(false);
     const [cancelTargetOrderId, setCancelTargetOrderId] = useState(null);
     const [cancelSubmitting, setCancelSubmitting] = useState(false);
+    const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+    const [scheduleTargetOrderId, setScheduleTargetOrderId] = useState(null);
+    const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
+    const [historyModalOpen, setHistoryModalOpen] = useState(false);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const [historyItems, setHistoryItems] = useState([]);
+    const [actionOrderId, setActionOrderId] = useState(null);
+    const [disputeModalOpen, setDisputeModalOpen] = useState(false);
+    const [disputeAction, setDisputeAction] = useState('');
+    const [disputeTargetOrderId, setDisputeTargetOrderId] = useState(null);
+    const [disputeSubmitting, setDisputeSubmitting] = useState(false);
+    const [reviewItems, setReviewItems] = useState([]);
+    const [disputeItems, setDisputeItems] = useState([]);
+    const [weeklySummary, setWeeklySummary] = useState(null);
+    const [monthlySummary, setMonthlySummary] = useState(null);
+    const [exportingType, setExportingType] = useState('');
     const [payoutSummary, setPayoutSummary] = useState({
         completed_orders: 0,
         pending_settlement: 0,
@@ -67,6 +94,8 @@ const FarmerOrders = () => {
         currency: 'INR',
     });
     const [cancelForm] = Form.useForm();
+    const [scheduleForm] = Form.useForm();
+    const [disputeForm] = Form.useForm();
     const navigate = useNavigate();
     const { user, logout } = useAuth();
 
@@ -101,9 +130,39 @@ const FarmerOrders = () => {
         }
     };
 
+    const loadReviewsAndDisputes = async () => {
+        try {
+            const [reviewsData, disputesData] = await Promise.all([
+                getFarmerReviews({ page: 1, limit: 5 }),
+                getFarmerDisputes({ page: 1, limit: 5 }),
+            ]);
+            setReviewItems(reviewsData?.items || []);
+            setDisputeItems(disputesData?.orders || []);
+        } catch {
+            setReviewItems([]);
+            setDisputeItems([]);
+        }
+    };
+
+    const loadPeriodSummaries = async () => {
+        try {
+            const [weeklyData, monthlyData] = await Promise.all([
+                getFarmerWeeklySummary(),
+                getFarmerMonthlySummary(),
+            ]);
+            setWeeklySummary(weeklyData?.summary || null);
+            setMonthlySummary(monthlyData?.summary || null);
+        } catch {
+            setWeeklySummary(null);
+            setMonthlySummary(null);
+        }
+    };
+
     useEffect(() => {
         loadOrders();
         loadPayoutSummary();
+        loadReviewsAndDisputes();
+        loadPeriodSummaries();
     }, []);
 
     const handleLogout = () => {
@@ -141,6 +200,9 @@ const FarmerOrders = () => {
                 amount: `INR ${Number(order.total_price || 0).toFixed(2)}`,
                 amountValue: Number(order.total_price || 0),
                 status: order.status,
+                deliveryDate: order.delivery_date,
+                deliverySlot: order.delivery_slot,
+                disputeStatus: order.dispute_status || 'none',
                 ageHours: Math.floor((Date.now() - new Date(order.created_at).getTime()) / (1000 * 60 * 60)),
             }))
             .sort((a, b) => {
@@ -153,7 +215,8 @@ const FarmerOrders = () => {
     const getActionsForStatus = (status) => {
         if (status === 'pending') {
             return [
-                { key: 'confirmed', label: 'Confirm Order' },
+                { key: 'schedule_confirm', label: 'Schedule + Confirm' },
+                { key: 'confirmed', label: 'Confirm Order Only' },
                 { key: 'cancelled', label: 'Cancel Order' },
             ];
         }
@@ -179,17 +242,25 @@ const FarmerOrders = () => {
     };
 
     const handleOrderAction = async (orderId, nextStatus) => {
+        if (actionOrderId === orderId) return;
+        if (nextStatus === 'schedule_confirm') {
+            handleOpenSchedule(orderId);
+            return;
+        }
         if (nextStatus === 'cancelled') {
             setCancelTargetOrderId(orderId);
             setCancelModalOpen(true);
             return;
         }
         try {
+            setActionOrderId(orderId);
             await updateOrderStatus(orderId, nextStatus);
             message.success('Order updated successfully');
             await Promise.all([loadOrders(), loadPayoutSummary()]);
         } catch (error) {
             message.error(error?.response?.data?.error || 'Failed to update order');
+        } finally {
+            setActionOrderId(null);
         }
     };
 
@@ -197,17 +268,98 @@ const FarmerOrders = () => {
         try {
             const values = await cancelForm.validateFields();
             setCancelSubmitting(true);
-            await updateOrderStatus(cancelTargetOrderId, 'cancelled', values.reason || '');
+            await updateOrderStatusDetailed(cancelTargetOrderId, {
+                status: 'cancelled',
+                cancellation_reason: values.reason || '',
+                cancellation_type: values.category || '',
+                cancellation_note: values.note || '',
+            });
             message.success('Order cancelled successfully');
             setCancelModalOpen(false);
             cancelForm.resetFields();
             setCancelTargetOrderId(null);
-            await Promise.all([loadOrders(), loadPayoutSummary()]);
+            await Promise.all([loadOrders(), loadPayoutSummary(), loadReviewsAndDisputes()]);
         } catch (error) {
             if (error?.errorFields) return;
             message.error(error?.response?.data?.error || 'Failed to cancel order');
         } finally {
             setCancelSubmitting(false);
+        }
+    };
+
+    const handleOpenSchedule = (orderId) => {
+        setScheduleTargetOrderId(orderId);
+        setScheduleModalOpen(true);
+    };
+
+    const handleSaveSchedule = async () => {
+        try {
+            const values = await scheduleForm.validateFields();
+            setScheduleSubmitting(true);
+            setActionOrderId(scheduleTargetOrderId);
+            await updateOrderStatusDetailed(scheduleTargetOrderId, {
+                status: 'confirmed',
+                delivery_slot: values.deliverySlot,
+                delivery_date: values.deliveryDate?.toISOString(),
+            });
+            message.success('Delivery schedule saved');
+            setScheduleModalOpen(false);
+            setScheduleTargetOrderId(null);
+            scheduleForm.resetFields();
+            await loadOrders();
+        } catch (error) {
+            if (error?.errorFields) return;
+            message.error(error?.response?.data?.error || 'Failed to save schedule');
+        } finally {
+            setScheduleSubmitting(false);
+            setActionOrderId(null);
+        }
+    };
+
+    const handleViewHistory = async (orderId) => {
+        try {
+            setHistoryModalOpen(true);
+            setHistoryLoading(true);
+            const data = await getOrderStatusHistory(orderId, { page: 1, limit: 50 });
+            setHistoryItems(data?.logs || []);
+        } catch {
+            setHistoryItems([]);
+        } finally {
+            setHistoryLoading(false);
+        }
+    };
+
+    const openDisputeModal = (orderId, action) => {
+        setDisputeTargetOrderId(orderId);
+        setDisputeAction(action);
+        disputeForm.resetFields();
+        setDisputeModalOpen(true);
+    };
+
+    const handleSubmitDisputeAction = async () => {
+        try {
+            const values = await disputeForm.validateFields();
+            setDisputeSubmitting(true);
+            setActionOrderId(disputeTargetOrderId);
+            if (disputeAction === 'open') {
+                await openDispute(disputeTargetOrderId, values.note || '');
+            } else if (disputeAction === 'resolve') {
+                await resolveDispute(disputeTargetOrderId, values.note || '');
+            } else if (disputeAction === 'reject') {
+                await rejectDispute(disputeTargetOrderId, values.note || '');
+            }
+            message.success(`Dispute ${disputeAction}d successfully`);
+            setDisputeModalOpen(false);
+            setDisputeTargetOrderId(null);
+            setDisputeAction('');
+            disputeForm.resetFields();
+            await Promise.all([loadOrders(), loadReviewsAndDisputes()]);
+        } catch (error) {
+            if (error?.errorFields) return;
+            message.error(error?.response?.data?.error || 'Failed to update dispute');
+        } finally {
+            setDisputeSubmitting(false);
+            setActionOrderId(null);
         }
     };
 
@@ -243,6 +395,28 @@ const FarmerOrders = () => {
             URL.revokeObjectURL(url);
         } catch (error) {
             message.error(error?.response?.data?.error || 'Failed to download invoice');
+        }
+    };
+
+    const handleExportReport = async (type) => {
+        try {
+            setExportingType(type);
+            const response = await exportFarmerReport(type);
+            const disposition = response.headers?.['content-disposition'] || '';
+            const match = disposition.match(/filename="?([^"]+)"?/i);
+            const filename = match?.[1] || `farmer_${type}_report.csv`;
+            const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+            message.success('Report exported');
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Failed to export report');
+        } finally {
+            setExportingType('');
         }
     };
 
@@ -304,17 +478,72 @@ const FarmerOrders = () => {
             },
         },
         {
+            title: 'Delivery',
+            key: 'delivery',
+            render: (_, record) => {
+                if (!record.deliveryDate && !record.deliverySlot) return <Text type="secondary">-</Text>;
+                return (
+                    <Text>
+                        {record.deliveryDate ? new Date(record.deliveryDate).toLocaleDateString() : '-'}
+                        {record.deliverySlot ? ` (${record.deliverySlot})` : ''}
+                    </Text>
+                );
+            },
+        },
+        {
+            title: 'Dispute',
+            dataIndex: 'disputeStatus',
+            key: 'disputeStatus',
+            render: (value) => {
+                if (!value || value === 'none') return <Tag>NONE</Tag>;
+                const color = value === 'open' ? 'error' : (value === 'resolved' ? 'success' : 'default');
+                return <Tag color={color}>{String(value).toUpperCase()}</Tag>;
+            },
+        },
+        {
             title: 'Action',
             key: 'action',
             render: (_, record) => {
                 const actions = getActionsForStatus(record.status);
                 return (
                     <Space>
+                        <Button type="text" onClick={() => handleViewHistory(record.key)} title="View status history">History</Button>
+                        {record.status === 'completed' && record.disputeStatus === 'none' ? (
+                            <Button
+                                type="text"
+                                loading={actionOrderId === record.key}
+                                onClick={() => openDisputeModal(record.key, 'open')}
+                                title="Raise dispute"
+                            >
+                                Dispute
+                            </Button>
+                        ) : null}
+                        {record.disputeStatus === 'open' ? (
+                            <>
+                                <Button
+                                    type="text"
+                                    loading={actionOrderId === record.key}
+                                    onClick={() => openDisputeModal(record.key, 'resolve')}
+                                    title="Resolve dispute"
+                                >
+                                    Resolve
+                                </Button>
+                                <Button
+                                    type="text"
+                                    loading={actionOrderId === record.key}
+                                    onClick={() => openDisputeModal(record.key, 'reject')}
+                                    title="Reject dispute"
+                                >
+                                    Reject
+                                </Button>
+                            </>
+                        ) : null}
                         <Button
                             type="text"
                             icon={<FileTextOutlined />}
                             onClick={() => handleDownloadInvoice(record.key)}
                             title="Download invoice"
+                            disabled={actionOrderId === record.key}
                         />
                         {actions.length ? (
                             <Dropdown
@@ -322,11 +551,12 @@ const FarmerOrders = () => {
                                     items: actions.map((action) => ({
                                         key: action.key,
                                         label: action.label,
+                                        disabled: actionOrderId === record.key,
                                         onClick: () => handleOrderAction(record.key, action.key),
                                     })),
                                 }}
                             >
-                                <Button type="text" icon={<MoreOutlined />} />
+                                <Button type="text" icon={<MoreOutlined />} loading={actionOrderId === record.key} />
                             </Dropdown>
                         ) : (
                             <Button type="text" icon={<MoreOutlined />} disabled />
@@ -430,9 +660,53 @@ const FarmerOrders = () => {
                     </Row>
 
                     <Card className="activity-card">
+                        <Row gutter={[16, 16]} style={{ marginBottom: '12px' }}>
+                            <Col xs={24} md={12}>
+                                <Card size="small" title="Weekly Summary">
+                                    <Text type="secondary">
+                                        Orders: {weeklySummary?.orders_count || 0}
+                                    </Text>
+                                    <br />
+                                    <Text type="secondary">
+                                        Net Payout: INR {Number(weeklySummary?.net_payout || 0).toFixed(2)}
+                                    </Text>
+                                </Card>
+                            </Col>
+                            <Col xs={24} md={12}>
+                                <Card size="small" title="Monthly Summary">
+                                    <Text type="secondary">
+                                        Orders: {monthlySummary?.orders_count || 0}
+                                    </Text>
+                                    <br />
+                                    <Text type="secondary">
+                                        Net Payout: INR {Number(monthlySummary?.net_payout || 0).toFixed(2)}
+                                    </Text>
+                                </Card>
+                            </Col>
+                        </Row>
                         <Text type="secondary" style={{ display: 'block', marginBottom: '8px' }}>
                             Overdue orders: {overdueOrders}
                         </Text>
+                        <Space style={{ marginBottom: '12px' }}>
+                            <Button
+                                onClick={() => handleExportReport('orders')}
+                                loading={exportingType === 'orders'}
+                            >
+                                Export Orders CSV
+                            </Button>
+                            <Button
+                                onClick={() => handleExportReport('payouts')}
+                                loading={exportingType === 'payouts'}
+                            >
+                                Export Payouts CSV
+                            </Button>
+                            <Button
+                                onClick={() => handleExportReport('disputes')}
+                                loading={exportingType === 'disputes'}
+                            >
+                                Export Disputes CSV
+                            </Button>
+                        </Space>
                         <Tabs
                             activeKey={activeTab}
                             onChange={setActiveTab}
@@ -447,6 +721,46 @@ const FarmerOrders = () => {
                             ]}
                         />
                         <Table columns={columns} dataSource={tableData} className="activity-table" loading={loading} />
+                        <Row gutter={[16, 16]} style={{ marginTop: '16px' }}>
+                            <Col xs={24} lg={12}>
+                                <Card size="small" title="Recent Reviews">
+                                    <Table
+                                        size="small"
+                                        pagination={false}
+                                        dataSource={reviewItems.slice(0, 5).map((item) => ({
+                                            key: item.review_id,
+                                            product: item.product_name,
+                                            reviewer: item.reviewer,
+                                            rating: item.rating,
+                                        }))}
+                                        columns={[
+                                            { title: 'Product', dataIndex: 'product', key: 'product' },
+                                            { title: 'Reviewer', dataIndex: 'reviewer', key: 'reviewer' },
+                                            { title: 'Rating', dataIndex: 'rating', key: 'rating' },
+                                        ]}
+                                    />
+                                </Card>
+                            </Col>
+                            <Col xs={24} lg={12}>
+                                <Card size="small" title="Dispute Tracker">
+                                    <Table
+                                        size="small"
+                                        pagination={false}
+                                        dataSource={disputeItems.slice(0, 5).map((item) => ({
+                                            key: item.order_id,
+                                            order: `#ORD-${item.order_id}`,
+                                            product: item.product_name || 'Produce',
+                                            status: item.dispute_status || 'none',
+                                        }))}
+                                        columns={[
+                                            { title: 'Order', dataIndex: 'order', key: 'order' },
+                                            { title: 'Product', dataIndex: 'product', key: 'product' },
+                                            { title: 'Dispute', dataIndex: 'status', key: 'status' },
+                                        ]}
+                                    />
+                                </Card>
+                            </Col>
+                        </Row>
                     </Card>
                 </Content>
             </Layout>
@@ -464,12 +778,118 @@ const FarmerOrders = () => {
                 okText="Confirm Cancel"
             >
                 <Form form={cancelForm} layout="vertical">
+                    <Form.Item label="Category" name="category" rules={[{ required: true, message: 'Please select category' }]}>
+                        <Select
+                            options={[
+                                { value: 'buyer_request', label: 'Buyer Request' },
+                                { value: 'stock_issue', label: 'Stock Issue' },
+                                { value: 'logistics_issue', label: 'Logistics Issue' },
+                                { value: 'quality_issue', label: 'Quality Issue' },
+                                { value: 'other', label: 'Other' },
+                            ]}
+                        />
+                    </Form.Item>
                     <Form.Item
                         label="Cancellation Reason"
                         name="reason"
-                        rules={[{ required: true, message: 'Please provide a reason' }]}
+                        rules={[
+                            { required: true, message: 'Please provide a reason' },
+                            { min: 5, message: 'Enter at least 5 characters' },
+                        ]}
                     >
                         <Input.TextArea rows={3} placeholder="Reason for cancellation" />
+                    </Form.Item>
+                    <Form.Item label="Internal Note" name="note" rules={[{ max: 300, message: 'Maximum 300 characters' }]}>
+                        <Input.TextArea rows={2} placeholder="Optional note for audit" />
+                    </Form.Item>
+                </Form>
+            </Modal>
+            <Modal
+                title="Schedule Delivery"
+                open={scheduleModalOpen}
+                onCancel={() => {
+                    setScheduleModalOpen(false);
+                    setScheduleTargetOrderId(null);
+                    scheduleForm.resetFields();
+                }}
+                onOk={handleSaveSchedule}
+                confirmLoading={scheduleSubmitting}
+                okText="Save Schedule"
+            >
+                <Form form={scheduleForm} layout="vertical">
+                    <Form.Item
+                        label="Delivery Date"
+                        name="deliveryDate"
+                        rules={[{ required: true, message: 'Select delivery date' }]}
+                    >
+                        <DatePicker
+                            style={{ width: '100%' }}
+                            disabledDate={(current) => current && current < new Date().setHours(0, 0, 0, 0)}
+                        />
+                    </Form.Item>
+                    <Form.Item
+                        label="Delivery Slot"
+                        name="deliverySlot"
+                        rules={[{ required: true, message: 'Select delivery slot' }]}
+                    >
+                        <Select
+                            options={[
+                                { value: '06:00-09:00', label: '06:00-09:00' },
+                                { value: '09:00-12:00', label: '09:00-12:00' },
+                                { value: '12:00-15:00', label: '12:00-15:00' },
+                                { value: '15:00-18:00', label: '15:00-18:00' },
+                            ]}
+                        />
+                    </Form.Item>
+                </Form>
+            </Modal>
+            <Modal title="Order Status History" open={historyModalOpen} onCancel={() => setHistoryModalOpen(false)} footer={null}>
+                <Table
+                    loading={historyLoading}
+                    pagination={false}
+                    dataSource={historyItems.map((item) => ({
+                        key: item.id,
+                        when: new Date(item.created_at).toLocaleString(),
+                        from: item.from_status,
+                        to: item.to_status,
+                        event: item.reason || '-',
+                        category: item.category || '-',
+                        note: item.note || item.reason || '-',
+                    }))}
+                    columns={[
+                        { title: 'When', dataIndex: 'when', key: 'when' },
+                        { title: 'From', dataIndex: 'from', key: 'from' },
+                        { title: 'To', dataIndex: 'to', key: 'to' },
+                        { title: 'Event', dataIndex: 'event', key: 'event' },
+                        { title: 'Category', dataIndex: 'category', key: 'category' },
+                        { title: 'Note', dataIndex: 'note', key: 'note' },
+                    ]}
+                />
+            </Modal>
+            <Modal
+                title={disputeAction === 'open' ? 'Open Dispute' : disputeAction === 'resolve' ? 'Resolve Dispute' : 'Reject Dispute'}
+                open={disputeModalOpen}
+                onCancel={() => {
+                    setDisputeModalOpen(false);
+                    setDisputeTargetOrderId(null);
+                    setDisputeAction('');
+                    disputeForm.resetFields();
+                }}
+                onOk={handleSubmitDisputeAction}
+                confirmLoading={disputeSubmitting}
+                okText="Submit"
+            >
+                <Form form={disputeForm} layout="vertical">
+                    <Form.Item
+                        label="Reason"
+                        name="note"
+                        rules={[
+                            { required: true, message: 'Reason is required' },
+                            { min: 5, message: 'Enter at least 5 characters' },
+                            { max: 300, message: 'Maximum 300 characters' },
+                        ]}
+                    >
+                        <Input.TextArea rows={3} placeholder="Enter reason" />
                     </Form.Item>
                 </Form>
             </Modal>

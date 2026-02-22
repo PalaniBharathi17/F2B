@@ -190,6 +190,12 @@
     background: #fafafa;
 }
 
+/* Table safety */
+.admin-content .ant-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
 /* Health Card */
 .health-card {
     border-radius: 16px !important;

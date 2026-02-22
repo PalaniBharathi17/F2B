@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/f2b-portal/backend/internal/models"
 	"github.com/f2b-portal/backend/internal/repository"
@@ -19,6 +20,7 @@ func NewProductService(productRepo *repository.ProductRepository) *ProductServic
 
 type CreateProductRequest struct {
 	CropName     string  `json:"crop_name"`
+	Category     string  `json:"category"`
 	Quantity     float64 `json:"quantity"`
 	Unit         string  `json:"unit"`
 	PricePerUnit float64 `json:"price_per_unit"`
@@ -35,6 +37,10 @@ type UpdateProductStatusRequest struct {
 type BulkUpdateProductStatusRequest struct {
 	ProductIDs []uint `json:"product_ids"`
 	Status     string `json:"status"`
+}
+
+type UpdateProductPriceRequest struct {
+	PricePerUnit float64 `json:"price_per_unit"`
 }
 
 func isAllowedProductStatus(status string) bool {
@@ -60,10 +66,14 @@ func (s *ProductService) CreateProduct(farmerID uint, req CreateProductRequest) 
 	if req.Unit == "" {
 		return nil, errors.New("unit is required")
 	}
+	if strings.TrimSpace(req.Category) == "" {
+		return nil, errors.New("category is required")
+	}
 
 	product := &models.Product{
 		FarmerID:     farmerID,
 		CropName:     utils.SanitizeString(req.CropName),
+		Category:     strings.ToLower(strings.TrimSpace(utils.SanitizeString(req.Category))),
 		Quantity:     req.Quantity,
 		Unit:         utils.SanitizeString(req.Unit),
 		PricePerUnit: req.PricePerUnit,
@@ -130,10 +140,15 @@ func (s *ProductService) UpdateProduct(productID, farmerID uint, req CreateProdu
 	if req.Unit == "" {
 		return nil, errors.New("unit is required")
 	}
+	if strings.TrimSpace(req.Category) == "" {
+		return nil, errors.New("category is required")
+	}
 
 	product.CropName = utils.SanitizeString(req.CropName)
+	product.Category = strings.ToLower(strings.TrimSpace(utils.SanitizeString(req.Category)))
 	product.Quantity = req.Quantity
 	product.Unit = utils.SanitizeString(req.Unit)
+	oldPrice := product.PricePerUnit
 	product.PricePerUnit = req.PricePerUnit
 	product.Description = utils.SanitizeString(req.Description)
 	product.City = utils.SanitizeString(req.City)
@@ -152,7 +167,84 @@ func (s *ProductService) UpdateProduct(productID, farmerID uint, req CreateProdu
 		return nil, errors.New("failed to update product")
 	}
 
+	if oldPrice != req.PricePerUnit {
+		_ = s.productRepo.CreatePriceHistory(&models.ProductPriceHistory{
+			ProductID: product.ID,
+			FarmerID:  farmerID,
+			OldPrice:  oldPrice,
+			NewPrice:  req.PricePerUnit,
+			ChangedAt: time.Now().UTC(),
+		})
+	}
+
 	return product, nil
+}
+
+func (s *ProductService) UpdateProductPrice(productID, farmerID uint, pricePerUnit float64) (*models.Product, error) {
+	if pricePerUnit <= 0 {
+		return nil, errors.New("price per unit must be greater than 0")
+	}
+	product, err := s.productRepo.GetByID(productID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+	if product.FarmerID != farmerID {
+		return nil, errors.New("unauthorized: you can only update your own products")
+	}
+
+	oldPrice := product.PricePerUnit
+	product.PricePerUnit = pricePerUnit
+	if err := s.productRepo.Update(product); err != nil {
+		return nil, errors.New("failed to update product price")
+	}
+	_ = s.productRepo.CreatePriceHistory(&models.ProductPriceHistory{
+		ProductID: product.ID,
+		FarmerID:  farmerID,
+		OldPrice:  oldPrice,
+		NewPrice:  pricePerUnit,
+		ChangedAt: time.Now().UTC(),
+	})
+
+	return s.productRepo.GetByID(productID)
+}
+
+func (s *ProductService) DuplicateProduct(productID, farmerID uint) (*models.Product, error) {
+	product, err := s.productRepo.GetByID(productID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+	if product.FarmerID != farmerID {
+		return nil, errors.New("unauthorized: you can only duplicate your own products")
+	}
+
+	clone := &models.Product{
+		FarmerID:     product.FarmerID,
+		CropName:     product.CropName + " (Copy)",
+		Category:     product.Category,
+		Quantity:     product.Quantity,
+		Unit:         product.Unit,
+		PricePerUnit: product.PricePerUnit,
+		Description:  product.Description,
+		City:         product.City,
+		State:        product.State,
+		ImageURL:     product.ImageURL,
+		Status:       "draft",
+	}
+	if err := s.productRepo.Create(clone); err != nil {
+		return nil, errors.New("failed to duplicate product")
+	}
+	return s.productRepo.GetByID(clone.ID)
+}
+
+func (s *ProductService) GetProductPriceHistory(productID, farmerID uint) ([]models.ProductPriceHistory, error) {
+	product, err := s.productRepo.GetByID(productID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+	if product.FarmerID != farmerID {
+		return nil, errors.New("unauthorized: you can only access your own products")
+	}
+	return s.productRepo.GetPriceHistoryByProduct(productID)
 }
 
 func (s *ProductService) UpdateProductStatus(productID, farmerID uint, status string) (*models.Product, error) {
