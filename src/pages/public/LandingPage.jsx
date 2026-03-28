@@ -358,7 +358,7 @@ const LandingPage = () => {
 
                 </Row>
                 <div className="footer-bottom">
-                    <Text type="secondary">© 2024 AgriMarket Inc. All rights reserved.</Text>
+                    <Text type="secondary">© 2026 AgriMarket Inc. All rights reserved.</Text>
                 </div>
             </Footer>
         </Layout>

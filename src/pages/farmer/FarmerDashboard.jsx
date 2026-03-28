@@ -34,10 +34,20 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { getFarmerAnalytics, getFarmerNotifications, getFarmerOrders } from '../../api/orders';
 import { getMyListings } from '../../api/products';
+import { getBackendOrigin } from '../../api/client';
 import './FarmerDashboard.css';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
+
+const getProfileTag = (user) => {
+    const verification = String(user?.verification_status || '').toLowerCase();
+    const badge = String(user?.farmer_profile?.badge || '').toUpperCase();
+    if (verification === 'pending') return { label: 'UNDER REVIEW', color: 'gold' };
+    if (verification === 'rejected') return { label: 'ACTION NEEDED', color: 'red' };
+    if (badge) return { label: badge, color: badge === 'GOLD' ? 'gold' : badge === 'SILVER' ? 'default' : 'orange' };
+    return { label: 'VERIFIED', color: 'green' };
+};
 
 const FarmerDashboard = () => {
     const [collapsed, setCollapsed] = useState(false);
@@ -49,6 +59,7 @@ const FarmerDashboard = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const navigate = useNavigate();
     const { user, logout } = useAuth();
+    const profileTag = getProfileTag(user);
 
     useEffect(() => {
         const loadDashboardData = async () => {
@@ -113,7 +124,7 @@ const FarmerDashboard = () => {
                 buyer: order?.buyer?.name || 'Buyer',
                 amount: `INR ${Number(order.total_price || 0).toFixed(2)}`,
                 status: order.status,
-                image: order?.product?.image_url ? `http://localhost:8080${order.product.image_url}` : undefined,
+                image: order?.product?.image_url ? `${getBackendOrigin()}${order.product.image_url}` : undefined,
             }))
     ), [recentOrders, searchQuery]);
 
@@ -167,7 +178,11 @@ const FarmerDashboard = () => {
         {
             title: 'Action',
             key: 'action',
-            render: () => <Button type="text" icon={<MoreOutlined />} aria-label="More actions" />,
+            render: (_, record) => (
+                <Button type="link" onClick={() => navigate('/farmer/orders', { state: { focusOrderId: record.key } })}>
+                    Open
+                </Button>
+            ),
         },
     ];
 
@@ -208,11 +223,11 @@ const FarmerDashboard = () => {
 
                 <div className="user-profile-section">
                     <div className="user-profile-card">
-                        <Avatar size={40} icon={<UserOutlined />} src="https://i.pravatar.cc/150?img=12" />
+                        <Avatar size={40} icon={<UserOutlined />} />
                         {!collapsed && (
                             <div className="user-info">
                                 <Text strong style={{ color: 'white', fontSize: '14px' }}>{user?.name || 'Farmer'}</Text>
-                                <Tag color="success" style={{ fontSize: '10px', padding: '0 6px' }}>PRO SELLER</Tag>
+                                <Tag color={profileTag.color} style={{ fontSize: '10px', padding: '0 6px' }}>{profileTag.label}</Tag>
                             </div>
                         )}
                     </div>
@@ -241,7 +256,7 @@ const FarmerDashboard = () => {
                             Add New Produce
                         </Button>
                         <Dropdown menu={{ items: [{ key: 'logout', label: 'Logout', icon: <LogoutOutlined />, onClick: handleLogout }] }}>
-                            <Avatar icon={<UserOutlined />} aria-label="Account menu" src="https://i.pravatar.cc/150?img=12" style={{ cursor: 'pointer' }} />
+                            <Avatar icon={<UserOutlined />} aria-label="Account menu" style={{ cursor: 'pointer' }} />
                         </Dropdown>
                     </div>
                 </Header>

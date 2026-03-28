@@ -19,15 +19,19 @@ func NewProductService(productRepo *repository.ProductRepository) *ProductServic
 }
 
 type CreateProductRequest struct {
-	CropName     string  `json:"crop_name"`
-	Category     string  `json:"category"`
-	Quantity     float64 `json:"quantity"`
-	Unit         string  `json:"unit"`
-	PricePerUnit float64 `json:"price_per_unit"`
-	Description  string  `json:"description"`
-	City         string  `json:"city"`
-	State        string  `json:"state"`
-	ImageURL     string  `json:"image_url"`
+	CropName               string  `json:"crop_name"`
+	Category               string  `json:"category"`
+	Quantity               float64 `json:"quantity"`
+	Unit                   string  `json:"unit"`
+	PricePerUnit           float64 `json:"price_per_unit"`
+	Description            string  `json:"description"`
+	City                   string  `json:"city"`
+	State                  string  `json:"state"`
+	ImageURL               string  `json:"image_url"`
+	IsBulkAvailable        bool    `json:"is_bulk_available"`
+	MinimumBulkQuantity    float64 `json:"minimum_bulk_quantity"`
+	SupportsHarvestRequest bool    `json:"supports_harvest_request"`
+	HarvestLeadDays        int     `json:"harvest_lead_days"`
 }
 
 type UpdateProductStatusRequest struct {
@@ -45,7 +49,7 @@ type UpdateProductPriceRequest struct {
 
 func isAllowedProductStatus(status string) bool {
 	switch status {
-	case "active", "sold", "expired", "draft":
+	case "active", "sold", "expired", "draft", "pending_review", "rejected":
 		return true
 	default:
 		return false
@@ -69,19 +73,32 @@ func (s *ProductService) CreateProduct(farmerID uint, req CreateProductRequest) 
 	if strings.TrimSpace(req.Category) == "" {
 		return nil, errors.New("category is required")
 	}
+	if req.MinimumBulkQuantity < 0 {
+		return nil, errors.New("minimum bulk quantity cannot be negative")
+	}
+	if req.IsBulkAvailable && req.MinimumBulkQuantity <= 0 {
+		req.MinimumBulkQuantity = req.Quantity
+	}
+	if req.HarvestLeadDays < 0 {
+		return nil, errors.New("harvest lead days cannot be negative")
+	}
 
 	product := &models.Product{
-		FarmerID:     farmerID,
-		CropName:     utils.SanitizeString(req.CropName),
-		Category:     strings.ToLower(strings.TrimSpace(utils.SanitizeString(req.Category))),
-		Quantity:     req.Quantity,
-		Unit:         utils.SanitizeString(req.Unit),
-		PricePerUnit: req.PricePerUnit,
-		Description:  utils.SanitizeString(req.Description),
-		City:         utils.SanitizeString(req.City),
-		State:        utils.SanitizeString(req.State),
-		ImageURL:     req.ImageURL,
-		Status:       "active",
+		FarmerID:               farmerID,
+		CropName:               utils.SanitizeString(req.CropName),
+		Category:               strings.ToLower(strings.TrimSpace(utils.SanitizeString(req.Category))),
+		Quantity:               req.Quantity,
+		Unit:                   utils.SanitizeString(req.Unit),
+		PricePerUnit:           req.PricePerUnit,
+		Description:            utils.SanitizeString(req.Description),
+		City:                   utils.SanitizeString(req.City),
+		State:                  utils.SanitizeString(req.State),
+		ImageURL:               req.ImageURL,
+		IsBulkAvailable:        req.IsBulkAvailable,
+		MinimumBulkQuantity:    req.MinimumBulkQuantity,
+		SupportsHarvestRequest: req.SupportsHarvestRequest,
+		HarvestLeadDays:        req.HarvestLeadDays,
+		Status:                 "pending_review",
 	}
 
 	if err := s.productRepo.Create(product); err != nil {
@@ -143,6 +160,15 @@ func (s *ProductService) UpdateProduct(productID, farmerID uint, req CreateProdu
 	if strings.TrimSpace(req.Category) == "" {
 		return nil, errors.New("category is required")
 	}
+	if req.MinimumBulkQuantity < 0 {
+		return nil, errors.New("minimum bulk quantity cannot be negative")
+	}
+	if req.IsBulkAvailable && req.MinimumBulkQuantity <= 0 {
+		req.MinimumBulkQuantity = req.Quantity
+	}
+	if req.HarvestLeadDays < 0 {
+		return nil, errors.New("harvest lead days cannot be negative")
+	}
 
 	product.CropName = utils.SanitizeString(req.CropName)
 	product.Category = strings.ToLower(strings.TrimSpace(utils.SanitizeString(req.Category)))
@@ -153,9 +179,21 @@ func (s *ProductService) UpdateProduct(productID, farmerID uint, req CreateProdu
 	product.Description = utils.SanitizeString(req.Description)
 	product.City = utils.SanitizeString(req.City)
 	product.State = utils.SanitizeString(req.State)
-	if req.ImageURL != "" {
+	product.IsBulkAvailable = req.IsBulkAvailable
+	product.MinimumBulkQuantity = req.MinimumBulkQuantity
+	product.SupportsHarvestRequest = req.SupportsHarvestRequest
+	product.HarvestLeadDays = req.HarvestLeadDays
+	// If image url changes, delete the old one to prevent orphan uploads.
+	if req.ImageURL != "" && req.ImageURL != product.ImageURL {
+		_ = utils.DeleteImage(product.ImageURL)
 		product.ImageURL = req.ImageURL
 	}
+	if product.Status == "rejected" || product.Status == "active" {
+		product.Status = "pending_review"
+	}
+	product.ModerationNote = ""
+	product.ReviewedAt = nil
+	product.ReviewedBy = nil
 	if product.Quantity <= 0 {
 		product.Status = "sold"
 		product.Quantity = 0
@@ -252,6 +290,9 @@ func (s *ProductService) UpdateProductStatus(productID, farmerID uint, status st
 	if !isAllowedProductStatus(nextStatus) {
 		return nil, errors.New("invalid status")
 	}
+	if nextStatus != "draft" && nextStatus != "expired" && nextStatus != "pending_review" {
+		return nil, errors.New("farmers can only move listings to draft, expired, or pending review")
+	}
 
 	product, err := s.productRepo.GetByID(productID)
 	if err != nil {
@@ -263,6 +304,9 @@ func (s *ProductService) UpdateProductStatus(productID, farmerID uint, status st
 
 	if product.Quantity <= 0 && nextStatus == "active" {
 		return nil, errors.New("cannot mark as active when quantity is 0")
+	}
+	if nextStatus == "active" {
+		return nil, errors.New("listings can only be activated by admin approval")
 	}
 	if product.Status == "sold" && nextStatus == "draft" {
 		return nil, errors.New("sold products cannot be moved to draft")
@@ -279,6 +323,9 @@ func (s *ProductService) BulkUpdateProductStatus(farmerID uint, productIDs []uin
 	if !isAllowedProductStatus(nextStatus) {
 		return errors.New("invalid status")
 	}
+	if nextStatus != "draft" && nextStatus != "expired" && nextStatus != "pending_review" {
+		return errors.New("farmers can only move listings to draft, expired, or pending review")
+	}
 	if len(productIDs) == 0 {
 		return errors.New("product ids are required")
 	}
@@ -293,6 +340,9 @@ func (s *ProductService) BulkUpdateProductStatus(farmerID uint, productIDs []uin
 		}
 		if product.Quantity <= 0 && nextStatus == "active" {
 			return errors.New("cannot mark out of stock products as active")
+		}
+		if nextStatus == "active" {
+			return errors.New("listings can only be activated by admin approval")
 		}
 	}
 
@@ -311,6 +361,9 @@ func (s *ProductService) DeleteProduct(productID, farmerID uint) error {
 	if product.FarmerID != farmerID {
 		return errors.New("unauthorized: you can only delete your own products")
 	}
+
+	// Best-effort cleanup for uploaded images.
+	_ = utils.DeleteImage(product.ImageURL)
 
 	return s.productRepo.Delete(productID)
 }

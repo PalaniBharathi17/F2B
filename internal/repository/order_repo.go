@@ -25,6 +25,9 @@ func (r *OrderRepository) GetByID(id uint) (*models.Order, error) {
 	var order models.Order
 	err := r.db.Preload("Product").Preload("Product.Farmer").
 		Preload("Buyer").Preload("Farmer").Preload("StatusLogs").
+		Preload("Messages").Preload("Messages.Sender").
+		Preload("DisputeEvidences").Preload("DisputeEvidences.Uploader").
+		Preload("SourceHarvestRequest").
 		Where("id = ?", id).First(&order).Error
 	if err != nil {
 		return nil, err
@@ -35,6 +38,7 @@ func (r *OrderRepository) GetByID(id uint) (*models.Order, error) {
 func (r *OrderRepository) GetByBuyerID(buyerID uint) ([]models.Order, error) {
 	var orders []models.Order
 	err := r.db.Preload("Product").Preload("Farmer").
+		Preload("SourceHarvestRequest").Preload("Messages").Preload("DisputeEvidences").
 		Where("buyer_id = ?", buyerID).
 		Order("created_at DESC").
 		Find(&orders).Error
@@ -44,6 +48,7 @@ func (r *OrderRepository) GetByBuyerID(buyerID uint) ([]models.Order, error) {
 func (r *OrderRepository) GetByFarmerID(farmerID uint) ([]models.Order, error) {
 	var orders []models.Order
 	err := r.db.Preload("Product").Preload("Buyer").
+		Preload("SourceHarvestRequest").Preload("Messages").Preload("DisputeEvidences").
 		Where("farmer_id = ?", farmerID).
 		Order("created_at DESC").
 		Find(&orders).Error
@@ -75,6 +80,32 @@ func (r *OrderRepository) ListAll() ([]models.Order, error) {
 		Order("created_at DESC").
 		Find(&orders).Error
 	return orders, err
+}
+
+func (r *OrderRepository) CreateOrderMessage(item *models.OrderMessage) error {
+	return r.db.Create(item).Error
+}
+
+func (r *OrderRepository) GetOrderMessages(orderID uint) ([]models.OrderMessage, error) {
+	var items []models.OrderMessage
+	err := r.db.Preload("Sender").
+		Where("order_id = ?", orderID).
+		Order("created_at ASC, id ASC").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *OrderRepository) CreateDisputeEvidence(item *models.DisputeEvidence) error {
+	return r.db.Create(item).Error
+}
+
+func (r *OrderRepository) GetDisputeEvidences(orderID uint) ([]models.DisputeEvidence, error) {
+	var items []models.DisputeEvidence
+	err := r.db.Preload("Uploader").
+		Where("order_id = ?", orderID).
+		Order("created_at DESC, id DESC").
+		Find(&items).Error
+	return items, err
 }
 
 func (r *OrderRepository) CreateStatusLog(logItem *models.OrderStatusLog) error {
@@ -149,4 +180,45 @@ func (r *OrderRepository) GetReviewsByBuyer(buyerID uint, page, limit int) ([]mo
 		Order("created_at DESC").Offset(offset).Limit(limit).
 		Find(&reviews).Error
 	return reviews, total, err
+}
+
+func (r *OrderRepository) CreateHarvestRequest(item *models.HarvestRequest) error {
+	return r.db.Create(item).Error
+}
+
+func (r *OrderRepository) GetHarvestRequestByID(id uint) (*models.HarvestRequest, error) {
+	var item models.HarvestRequest
+	err := r.db.Preload("Product").Preload("Buyer").Preload("Farmer").Preload("ConvertedOrder").
+		Where("id = ?", id).
+		First(&item).Error
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (r *OrderRepository) GetHarvestRequestsByBuyer(buyerID uint) ([]models.HarvestRequest, error) {
+	var items []models.HarvestRequest
+	err := r.db.Preload("Product").Preload("Farmer").Preload("ConvertedOrder").
+		Where("buyer_id = ?", buyerID).
+		Order("created_at DESC").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *OrderRepository) GetHarvestRequestsByFarmer(farmerID uint) ([]models.HarvestRequest, error) {
+	var items []models.HarvestRequest
+	err := r.db.Preload("Product").Preload("Buyer").Preload("ConvertedOrder").
+		Where("farmer_id = ?", farmerID).
+		Order("created_at DESC").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *OrderRepository) ListAllHarvestRequests() ([]models.HarvestRequest, error) {
+	var items []models.HarvestRequest
+	err := r.db.Preload("Product").Preload("Buyer").Preload("Farmer").Preload("ConvertedOrder").
+		Order("created_at DESC").
+		Find(&items).Error
+	return items, err
 }

@@ -33,8 +33,9 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { createProduct } from '../../api/products';
-import { getFarmerOrders } from '../../api/orders';
+import { getFarmerNotifications, getFarmerOrders } from '../../api/orders';
 import { uploadImage } from '../../api/upload';
+import { getMyDocuments, uploadMyDocument } from '../../api/users';
 import './FarmerDashboard.css';
 
 const { Header, Sider, Content } = Layout;
@@ -42,26 +43,47 @@ const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 
+const getProfileTag = (user) => {
+    const verification = String(user?.verification_status || '').toLowerCase();
+    const badge = String(user?.farmer_profile?.badge || '').toUpperCase();
+    if (verification === 'pending') return { label: 'UNDER REVIEW', color: 'gold' };
+    if (verification === 'rejected') return { label: 'ACTION NEEDED', color: 'red' };
+    if (badge) return { label: badge, color: badge === 'GOLD' ? 'gold' : badge === 'SILVER' ? 'default' : 'orange' };
+    return { label: 'VERIFIED', color: 'green' };
+};
+
 const AddProduce = () => {
     const [collapsed, setCollapsed] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [pendingOrders, setPendingOrders] = useState(0);
     const [imageFile, setImageFile] = useState(null);
+    const [notifications, setNotifications] = useState([]);
+    const [documents, setDocuments] = useState([]);
+    const [documentFile, setDocumentFile] = useState(null);
     const [form] = Form.useForm();
     const navigate = useNavigate();
     const { user, logout } = useAuth();
+    const profileTag = getProfileTag(user);
 
     useEffect(() => {
-        const loadPendingOrders = async () => {
+        const loadHeaderData = async () => {
             try {
-                const data = await getFarmerOrders();
+                const [data, notificationsData] = await Promise.all([
+                    getFarmerOrders(),
+                    getFarmerNotifications(),
+                ]);
+                const docs = await getMyDocuments();
                 const count = (data?.orders || []).filter((o) => o.status === 'pending').length;
                 setPendingOrders(count);
+                setNotifications(notificationsData?.items || []);
+                setDocuments(docs?.items || []);
             } catch {
                 setPendingOrders(0);
+                setNotifications([]);
+                setDocuments([]);
             }
         };
-        loadPendingOrders();
+        loadHeaderData();
     }, []);
 
     const handleLogout = () => {
@@ -76,6 +98,13 @@ const AddProduce = () => {
             if (imageFile) {
                 const uploaded = await uploadImage(imageFile);
                 imageUrl = uploaded?.url || '';
+            }
+            if (documentFile) {
+                const uploadedDoc = await uploadImage(documentFile);
+                await uploadMyDocument({
+                    document_type: values.document_type || 'farm_proof',
+                    document_url: uploadedDoc?.url || '',
+                });
             }
             const metaLine = [
                 `Category: ${values.category || 'N/A'}`,
@@ -94,8 +123,12 @@ const AddProduce = () => {
                 city: values.city || '',
                 state: values.state || '',
                 image_url: imageUrl,
+                is_bulk_available: Boolean(values.bulk),
+                minimum_bulk_quantity: Number(values.minimum_bulk_quantity || 0),
+                supports_harvest_request: Boolean(values.supports_harvest_request),
+                harvest_lead_days: Number(values.harvest_lead_days || 0),
             });
-            message.success('Listing added successfully');
+            message.success('Listing submitted for admin review');
             navigate('/farmer/listings');
         } catch (error) {
             message.error(error?.response?.data?.error || 'Failed to add listing');
@@ -130,6 +163,19 @@ const AddProduce = () => {
             onClick: () => navigate('/farmer/orders')
         },
     ];
+
+    const notificationMenuItems = notifications.length
+        ? notifications.slice(0, 8).map((item) => ({
+            key: item.id,
+            label: (
+                <div style={{ maxWidth: 320 }}>
+                    <Text strong>{item.title}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: '12px' }}>{item.message}</Text>
+                </div>
+            ),
+        }))
+        : [{ key: 'empty', label: <Text type="secondary">No new notifications</Text>, disabled: true }];
 
     return (
         <Layout className="farmer-dashboard-layout">
@@ -166,7 +212,7 @@ const AddProduce = () => {
                         {!collapsed && (
                             <div className="user-info">
                                 <Text strong style={{ color: 'white', fontSize: '14px' }}>{user?.name || 'Farmer'}</Text>
-                                <Tag color="success" style={{ fontSize: '10px', padding: '0 6px' }}>ACTIVE</Tag>
+                                <Tag color={profileTag.color} style={{ fontSize: '10px', padding: '0 6px' }}>{profileTag.label}</Tag>
                             </div>
                         )}
                     </div>
@@ -179,14 +225,14 @@ const AddProduce = () => {
                         <Title level={3} style={{ margin: 0 }}>Create New Listing</Title>
                     </div>
                     <div className="header-right">
-                        <Input
-                            placeholder="Search orders..."
-                            prefix={<SearchOutlined />}
-                            className="search-input"
-                        />
-                        <Badge count={pendingOrders} offset={[-5, 5]}>
-                            <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
-                        </Badge>
+                        <Button type="text" icon={<SearchOutlined />} onClick={() => navigate('/farmer/listings')}>
+                            Browse Listings
+                        </Button>
+                        <Dropdown menu={{ items: notificationMenuItems }} trigger={['click']}>
+                            <Badge count={notifications.length || pendingOrders} offset={[-5, 5]}>
+                                <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
+                            </Badge>
+                        </Dropdown>
                         <Dropdown
                             menu={{
                                 items: [
@@ -202,7 +248,10 @@ const AddProduce = () => {
                 <Content className="dashboard-content">
                     <div className="welcome-section">
                         <Title level={2}>Add New Produce</Title>
-                        <Paragraph type="secondary">Create a listing that will be saved to backend and PostgreSQL.</Paragraph>
+                        <Paragraph type="secondary">Create a listing and submit it to the admin moderation queue.</Paragraph>
+                        <Paragraph type="secondary">
+                            Listing quality: image {imageFile ? 'added' : 'missing'} | location {form.getFieldValue('city') || form.getFieldValue('state') ? 'added' : 'missing'} | verification docs {documents.length}
+                        </Paragraph>
                     </div>
 
                     <Card className="activity-card" style={{ maxWidth: '900px', margin: '0 auto' }}>
@@ -212,7 +261,8 @@ const AddProduce = () => {
                             onFinish={onFinish}
                             initialValues={{
                                 unit: 'kg',
-                                organic: true
+                                organic: true,
+                                supports_harvest_request: true,
                             }}
                         >
                             <Row gutter={24}>
@@ -311,6 +361,30 @@ const AddProduce = () => {
                                         </Upload>
                                     </Form.Item>
                                 </Col>
+                                <Col xs={24} md={12}>
+                                    <Form.Item label="Verification Document Type" name="document_type">
+                                        <Select size="large">
+                                            <Option value="farm_proof">Farm Proof</Option>
+                                            <Option value="government_id">Government ID</Option>
+                                            <Option value="organic_certificate">Organic Certificate</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                                <Col span={24}>
+                                    <Form.Item label="Verification Document Upload">
+                                        <Upload
+                                            listType="text"
+                                            maxCount={1}
+                                            beforeUpload={(file) => {
+                                                setDocumentFile(file);
+                                                return false;
+                                            }}
+                                            onRemove={() => setDocumentFile(null)}
+                                        >
+                                            <Button>Upload Verification Document</Button>
+                                        </Upload>
+                                    </Form.Item>
+                                </Col>
 
                                 <Col xs={12} md={6}>
                                     <Form.Item label="Organic" name="organic" valuePropName="checked">
@@ -320,6 +394,21 @@ const AddProduce = () => {
                                 <Col xs={12} md={6}>
                                     <Form.Item label="Bulk Available" name="bulk" valuePropName="checked">
                                         <Switch />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12} md={6}>
+                                    <Form.Item label="Min Bulk Qty" name="minimum_bulk_quantity">
+                                        <InputNumber min={0} step={0.1} style={{ width: '100%' }} />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12} md={6}>
+                                    <Form.Item label="Harvest Requests" name="supports_harvest_request" valuePropName="checked">
+                                        <Switch />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12} md={6}>
+                                    <Form.Item label="Harvest Lead Days" name="harvest_lead_days">
+                                        <InputNumber min={0} style={{ width: '100%' }} />
                                     </Form.Item>
                                 </Col>
 

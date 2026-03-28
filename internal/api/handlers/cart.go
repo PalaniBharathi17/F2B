@@ -79,10 +79,12 @@ func (h *CartHandler) Checkout(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	var req struct {
 		DeliveryAddress string `json:"delivery_address"`
+		PaymentMethod   string `json:"payment_method"`
+		PaymentReference string `json:"payment_reference"`
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	orders, err := h.cartService.Checkout(userID.(uint), req.DeliveryAddress)
+	orders, err := h.cartService.CheckoutWithPayment(userID.(uint), req.DeliveryAddress, req.PaymentMethod, req.PaymentReference)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

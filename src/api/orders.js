@@ -5,6 +5,31 @@ export const getBuyerOrders = async () => {
     return response.data;
 };
 
+export const getOrderMessages = async (orderId) => {
+    const response = await apiClient.get(`/orders/${orderId}/messages`);
+    return response.data;
+};
+
+export const sendOrderMessage = async (orderId, payload) => {
+    const response = await apiClient.post(`/orders/${orderId}/messages`, payload);
+    return response.data;
+};
+
+export const getDisputeEvidence = async (orderId) => {
+    const response = await apiClient.get(`/orders/${orderId}/dispute/evidence`);
+    return response.data;
+};
+
+export const addDisputeEvidence = async (orderId, payload) => {
+    const response = await apiClient.post(`/orders/${orderId}/dispute/evidence`, payload);
+    return response.data;
+};
+
+export const getBuyerHarvestRequests = async () => {
+    const response = await apiClient.get('/orders/my/harvest-requests');
+    return response.data;
+};
+
 export const getBuyerReviews = async (params = {}) => {
     const response = await apiClient.get('/orders/my/reviews', { params });
     return response.data;
@@ -22,6 +47,31 @@ export const submitBuyerReview = async (orderId, payload) => {
 
 export const getFarmerOrders = async () => {
     const response = await apiClient.get('/orders/farmer/orders');
+    return response.data;
+};
+
+export const getFarmerHarvestRequests = async () => {
+    const response = await apiClient.get('/orders/farmer/harvest-requests');
+    return response.data;
+};
+
+export const createBulkOrder = async (payload) => {
+    const response = await apiClient.post('/orders/bulk', payload);
+    return response.data;
+};
+
+export const createHarvestRequest = async (payload) => {
+    const response = await apiClient.post('/orders/harvest-requests', payload);
+    return response.data;
+};
+
+export const updateHarvestRequest = async (requestId, payload) => {
+    const response = await apiClient.patch(`/orders/harvest-requests/${requestId}`, payload);
+    return response.data;
+};
+
+export const convertHarvestRequestToOrder = async (requestId, payload = {}) => {
+    const response = await apiClient.post(`/orders/harvest-requests/${requestId}/convert`, payload);
     return response.data;
 };
 

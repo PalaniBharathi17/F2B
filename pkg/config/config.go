@@ -8,19 +8,23 @@ import (
 )
 
 type Config struct {
-	DBHost      string
-	DBPort      string
-	DBUser      string
-	DBPassword  string
-	DBName      string
-	DBSSLMode   string
-	JWTSecret   string
-	Port        string
-	SMTPHost    string
-	SMTPPort    string
-	SMTPUser    string
-	SMTPPass    string
-	FrontendURL string
+	DBHost        string
+	DBPort        string
+	DBUser        string
+	DBPassword    string
+	DBName        string
+	DBSSLMode     string
+	JWTSecret     string
+	Port          string
+	SMTPHost      string
+	SMTPPort      string
+	SMTPUser      string
+	SMTPPass      string
+	FrontendURL   string
+	AdminName     string
+	AdminEmail    string
+	AdminPhone    string
+	AdminPassword string
 }
 
 var AppConfig *Config
@@ -30,19 +34,23 @@ func LoadConfig() (*Config, error) {
 	_ = godotenv.Load()
 
 	config := &Config{
-		DBHost:      getEnv("DB_HOST", "localhost"),
-		DBPort:      getEnv("DB_PORT", "5432"),
-		DBUser:      getEnv("DB_USER", "postgres"),
-		DBPassword:  getEnv("DB_PASSWORD", ""),
-		DBName:      getEnv("DB_NAME", "f2b_portal"),
-		DBSSLMode:   getEnv("DB_SSLMODE", "disable"),
-		JWTSecret:   getEnv("JWT_SECRET", "change-this-secret-key"),
-		Port:        getEnv("PORT", "8080"),
-		SMTPHost:    getEnv("SMTP_HOST", "smtp.gmail.com"),
-		SMTPPort:    getEnv("SMTP_PORT", "587"),
-		SMTPUser:    getEnv("SMTP_USER", ""),
-		SMTPPass:    getEnv("SMTP_PASS", ""),
-		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+		DBHost:        getEnv("DB_HOST", "localhost"),
+		DBPort:        getEnv("DB_PORT", "5432"),
+		DBUser:        getEnv("DB_USER", "postgres"),
+		DBPassword:    getEnv("DB_PASSWORD", ""),
+		DBName:        getEnv("DB_NAME", "f2b_portal"),
+		DBSSLMode:     getEnv("DB_SSLMODE", "disable"),
+		JWTSecret:     getEnv("JWT_SECRET", "change-this-secret-key"),
+		Port:          getEnv("PORT", "8080"),
+		SMTPHost:      getEnv("SMTP_HOST", "smtp.gmail.com"),
+		SMTPPort:      getEnv("SMTP_PORT", "587"),
+		SMTPUser:      getEnv("SMTP_USER", ""),
+		SMTPPass:      getEnv("SMTP_PASS", ""),
+		FrontendURL:   getEnv("FRONTEND_URL", "http://localhost:5173"),
+		AdminName:     getEnv("ADMIN_NAME", "Platform Admin"),
+		AdminEmail:    getEnv("ADMIN_EMAIL", ""),
+		AdminPhone:    getEnv("ADMIN_PHONE", ""),
+		AdminPassword: getEnv("ADMIN_PASSWORD", ""),
 	}
 
 	AppConfig = config

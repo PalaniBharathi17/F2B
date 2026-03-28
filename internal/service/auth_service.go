@@ -39,7 +39,7 @@ func (s *AuthService) Register(req RegisterRequest) (*models.User, string, error
 		return nil, "", errors.New("password must be at least 6 characters")
 	}
 	if !utils.IsValidUserType(req.UserType) {
-		return nil, "", errors.New("user_type must be 'farmer' or 'buyer'")
+		return nil, "", errors.New("user_type must be 'farmer', 'buyer', or 'admin'")
 	}
 
 	// Check if user already exists
@@ -56,13 +56,18 @@ func (s *AuthService) Register(req RegisterRequest) (*models.User, string, error
 
 	// Create user
 	user := &models.User{
-		Name:     utils.SanitizeString(req.Name),
-		Email:    utils.SanitizeString(req.Email),
-		Phone:    utils.SanitizeString(req.Phone),
-		Password: string(hashedPassword),
-		UserType: req.UserType,
-		City:     utils.SanitizeString(req.City),
-		State:    utils.SanitizeString(req.State),
+		Name:               utils.SanitizeString(req.Name),
+		Email:              utils.SanitizeString(req.Email),
+		Phone:              utils.SanitizeString(req.Phone),
+		Password:           string(hashedPassword),
+		UserType:           req.UserType,
+		IsActive:           true,
+		VerificationStatus: "verified",
+		City:               utils.SanitizeString(req.City),
+		State:              utils.SanitizeString(req.State),
+	}
+	if req.UserType == "farmer" {
+		user.VerificationStatus = "pending"
 	}
 
 	if err := s.userRepo.Create(user); err != nil {
@@ -103,6 +108,9 @@ func (s *AuthService) Login(email, password string) (*models.User, string, error
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
 	if err != nil {
 		return nil, "", errors.New("invalid credentials")
+	}
+	if !user.IsActive {
+		return nil, "", errors.New("account is suspended")
 	}
 
 	// Generate JWT token

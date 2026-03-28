@@ -32,9 +32,26 @@ func NewOrderService(orderRepo *repository.OrderRepository, productRepo *reposit
 }
 
 type CreateOrderRequest struct {
-	ProductID       uint    `json:"product_id"`
-	Quantity        float64 `json:"quantity"`
-	DeliveryAddress string  `json:"delivery_address"`
+	ProductID        uint    `json:"product_id"`
+	Quantity         float64 `json:"quantity"`
+	DeliveryAddress  string  `json:"delivery_address"`
+	BuyerNote        string  `json:"buyer_note"`
+	PaymentMethod    string  `json:"payment_method"`
+	PaymentReference string  `json:"payment_reference"`
+	PreferredDate    string  `json:"preferred_date"`
+}
+
+type CreateHarvestRequestRequest struct {
+	ProductID            uint    `json:"product_id"`
+	RequestedQuantity    float64 `json:"requested_quantity"`
+	PreferredHarvestDate string  `json:"preferred_harvest_date"`
+	DeliveryAddress      string  `json:"delivery_address"`
+	BuyerNote            string  `json:"buyer_note"`
+}
+
+type UpdateHarvestRequestRequest struct {
+	Status             string `json:"status"`
+	FarmerResponseNote string `json:"farmer_response_note"`
 }
 
 type UpdateOrderStatusRequest struct {
@@ -50,6 +67,15 @@ type UpdateOrderStatusRequest struct {
 
 type UpdateDisputeRequest struct {
 	Note string `json:"note"`
+}
+
+type SendOrderMessageRequest struct {
+	Message string `json:"message"`
+}
+
+type AddDisputeEvidenceRequest struct {
+	Note        string `json:"note"`
+	EvidenceURL string `json:"evidence_url"`
 }
 
 type SubmitReviewRequest struct {
@@ -194,13 +220,108 @@ func isAllowedDisputeStatus(value string) bool {
 	}
 }
 
+func isAllowedHarvestRequestStatus(value string) bool {
+	switch value {
+	case "pending", "accepted", "rejected", "ready", "completed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizePaymentMethod(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func isAllowedPaymentMethod(value string) bool {
+	switch normalizePaymentMethod(value) {
+	case "cod", "upi", "online_banking":
+		return true
+	default:
+		return false
+	}
+}
+
+func derivePaymentStatus(method string) string {
+	if normalizePaymentMethod(method) == "cod" {
+		return "pending"
+	}
+	return "initiated"
+}
+
+func validatePayment(method, reference string) error {
+	paymentMethod := normalizePaymentMethod(method)
+	if paymentMethod == "" {
+		return errors.New("payment method is required")
+	}
+	if !isAllowedPaymentMethod(paymentMethod) {
+		return errors.New("invalid payment method")
+	}
+	ref := strings.TrimSpace(reference)
+	if paymentMethod == "upi" && ref == "" {
+		return errors.New("upi id is required")
+	}
+	if paymentMethod == "online_banking" && ref == "" {
+		return errors.New("bank reference is required")
+	}
+	return nil
+}
+
+func parseOptionalRFC3339(value string) (*time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return nil, errors.New("invalid preferred date format")
+	}
+	return &parsed, nil
+}
+
 func (s *OrderService) CreateOrder(buyerID uint, req CreateOrderRequest) (*models.Order, error) {
+	return s.createInventoryOrder(buyerID, req, "standard", 0)
+}
+
+func (s *OrderService) CreateBulkOrder(buyerID uint, req CreateOrderRequest) (*models.Order, error) {
 	if req.Quantity <= 0 {
 		return nil, errors.New("quantity must be greater than 0")
 	}
+	product, err := s.productRepo.GetByID(req.ProductID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+	if !product.IsBulkAvailable {
+		return nil, errors.New("bulk ordering is not enabled for this product")
+	}
+	minQty := product.MinimumBulkQuantity
+	if minQty <= 0 {
+		minQty = product.Quantity
+	}
+	if req.Quantity < minQty {
+		return nil, errors.New("bulk quantity is below the farmer minimum")
+	}
+	return s.createInventoryOrder(buyerID, req, "bulk", 0)
+}
+
+func (s *OrderService) createInventoryOrder(buyerID uint, req CreateOrderRequest, orderType string, sourceRequestID uint) (*models.Order, error) {
+	if req.Quantity <= 0 {
+		return nil, errors.New("quantity must be greater than 0")
+	}
+	if err := validatePayment(req.PaymentMethod, req.PaymentReference); err != nil {
+		return nil, err
+	}
+
+	preferredDate, err := parseOptionalRFC3339(req.PreferredDate)
+	if err != nil {
+		return nil, err
+	}
+	if preferredDate != nil && preferredDate.Before(time.Now().UTC().Add(-5*time.Minute)) {
+		return nil, errors.New("preferred date cannot be in the past")
+	}
 
 	var createdOrderID uint
-	err := s.orderRepo.GetDB().Transaction(func(tx *gorm.DB) error {
+	err = s.orderRepo.GetDB().Transaction(func(tx *gorm.DB) error {
 		var product models.Product
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", req.ProductID).
@@ -219,20 +340,47 @@ func (s *OrderService) CreateOrder(buyerID uint, req CreateOrderRequest) (*model
 		}
 
 		order := &models.Order{
-			ProductID:       req.ProductID,
-			BuyerID:         buyerID,
-			FarmerID:        product.FarmerID,
-			Quantity:        req.Quantity,
-			TotalPrice:      req.Quantity * product.PricePerUnit,
-			Status:          "pending",
-			DeliveryAddress: utils.SanitizeString(req.DeliveryAddress),
+			ProductID:        req.ProductID,
+			BuyerID:          buyerID,
+			FarmerID:         product.FarmerID,
+			Quantity:         req.Quantity,
+			TotalPrice:       req.Quantity * product.PricePerUnit,
+			OrderType:        orderType,
+			BuyerNote:        utils.SanitizeString(req.BuyerNote),
+			PaymentMethod:    normalizePaymentMethod(req.PaymentMethod),
+			PaymentReference: utils.SanitizeString(req.PaymentReference),
+			PaymentStatus:    derivePaymentStatus(req.PaymentMethod),
+			PreferredDate:    preferredDate,
+			Status:           "pending",
+			DeliveryAddress:  utils.SanitizeString(req.DeliveryAddress),
+		}
+		if sourceRequestID > 0 {
+			order.SourceRequestID = &sourceRequestID
 		}
 		if err := tx.Create(order).Error; err != nil {
 			return errors.New("failed to create order")
 		}
 		createdOrderID = order.ID
 
-		// Reserve inventory atomically with order creation.
+		logNote := "Order placed by buyer"
+		if orderType == "bulk" {
+			logNote = "Bulk order placed by buyer"
+		} else if sourceRequestID > 0 {
+			logNote = "Order converted from harvest request"
+		}
+		if err := tx.Create(&models.OrderStatusLog{
+			OrderID:    order.ID,
+			ActorID:    buyerID,
+			FromStatus: "new",
+			ToStatus:   "pending",
+			Reason:     "order_created",
+			Category:   orderType,
+			Note:       logNote,
+			CreatedAt:  time.Now().UTC(),
+		}).Error; err != nil {
+			return errors.New("failed to initialize order timeline")
+		}
+
 		product.Quantity -= req.Quantity
 		if product.Quantity <= 0 {
 			product.Quantity = 0
@@ -240,6 +388,24 @@ func (s *OrderService) CreateOrder(buyerID uint, req CreateOrderRequest) (*model
 		}
 		if err := tx.Save(&product).Error; err != nil {
 			return errors.New("failed to reserve inventory")
+		}
+
+		if sourceRequestID > 0 {
+			var request models.HarvestRequest
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ?", sourceRequestID).
+				First(&request).Error; err == nil {
+				now := time.Now().UTC()
+				request.Status = "completed"
+				request.ConvertedOrderID = &order.ID
+				request.RespondedAt = &now
+				if strings.TrimSpace(request.FarmerResponseNote) == "" {
+					request.FarmerResponseNote = "Converted into confirmed buyer order flow"
+				}
+				if err := tx.Save(&request).Error; err != nil {
+					return errors.New("failed to update harvest request")
+				}
+			}
 		}
 
 		return nil
@@ -251,12 +417,269 @@ func (s *OrderService) CreateOrder(buyerID uint, req CreateOrderRequest) (*model
 	return s.orderRepo.GetByID(createdOrderID)
 }
 
+func (s *OrderService) CreateHarvestRequest(buyerID uint, req CreateHarvestRequestRequest) (*models.HarvestRequest, error) {
+	if req.ProductID == 0 {
+		return nil, errors.New("product_id is required")
+	}
+	if req.RequestedQuantity <= 0 {
+		return nil, errors.New("requested quantity must be greater than 0")
+	}
+	preferredDate, err := parseOptionalRFC3339(req.PreferredHarvestDate)
+	if err != nil || preferredDate == nil {
+		return nil, errors.New("preferred harvest date is required")
+	}
+	if preferredDate.Before(time.Now().UTC().Add(-5 * time.Minute)) {
+		return nil, errors.New("preferred harvest date cannot be in the past")
+	}
+
+	product, err := s.productRepo.GetByID(req.ProductID)
+	if err != nil {
+		return nil, errors.New("product not found")
+	}
+	if product.FarmerID == buyerID {
+		return nil, errors.New("you cannot request harvest from your own product")
+	}
+	if !product.SupportsHarvestRequest {
+		return nil, errors.New("harvest requests are not enabled for this product")
+	}
+	if product.HarvestLeadDays > 0 {
+		minDate := time.Now().UTC().AddDate(0, 0, product.HarvestLeadDays)
+		if preferredDate.Before(minDate) {
+			return nil, errors.New("preferred harvest date is earlier than the farmer lead time")
+		}
+	}
+
+	item := &models.HarvestRequest{
+		ProductID:            product.ID,
+		BuyerID:              buyerID,
+		FarmerID:             product.FarmerID,
+		RequestedQuantity:    req.RequestedQuantity,
+		PreferredHarvestDate: *preferredDate,
+		DeliveryAddress:      utils.SanitizeString(req.DeliveryAddress),
+		BuyerNote:            utils.SanitizeString(req.BuyerNote),
+		Status:               "pending",
+	}
+	if err := s.orderRepo.CreateHarvestRequest(item); err != nil {
+		return nil, errors.New("failed to create harvest request")
+	}
+	return s.orderRepo.GetHarvestRequestByID(item.ID)
+}
+
+func (s *OrderService) GetHarvestRequestsByBuyer(buyerID uint) ([]models.HarvestRequest, error) {
+	return s.orderRepo.GetHarvestRequestsByBuyer(buyerID)
+}
+
+func (s *OrderService) GetHarvestRequestsByFarmer(farmerID uint) ([]models.HarvestRequest, error) {
+	return s.orderRepo.GetHarvestRequestsByFarmer(farmerID)
+}
+
+func (s *OrderService) UpdateHarvestRequest(requestID, actorID uint, req UpdateHarvestRequestRequest) (*models.HarvestRequest, error) {
+	nextStatus := strings.ToLower(strings.TrimSpace(req.Status))
+	if !isAllowedHarvestRequestStatus(nextStatus) {
+		return nil, errors.New("invalid harvest request status")
+	}
+
+	var updatedID uint
+	err := s.orderRepo.GetDB().Transaction(func(tx *gorm.DB) error {
+		var item models.HarvestRequest
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", requestID).
+			First(&item).Error; err != nil {
+			return errors.New("harvest request not found")
+		}
+
+		isBuyer := item.BuyerID == actorID
+		isFarmer := item.FarmerID == actorID
+		if !isBuyer && !isFarmer {
+			return errors.New("unauthorized harvest request access")
+		}
+
+		validTransitions := map[string][]string{
+			"pending":   {"accepted", "rejected", "cancelled"},
+			"accepted":  {"ready", "rejected", "cancelled"},
+			"ready":     {"completed", "cancelled"},
+			"rejected":  {},
+			"completed": {},
+			"cancelled": {},
+		}
+		allowed := false
+		for _, candidate := range validTransitions[item.Status] {
+			if candidate == nextStatus {
+				allowed = true
+				break
+			}
+		}
+		if item.Status != nextStatus && !allowed {
+			return errors.New("invalid harvest request transition")
+		}
+		if isBuyer && nextStatus != "cancelled" && nextStatus != "completed" {
+			return errors.New("buyers can only cancel or complete their harvest request flow")
+		}
+		if isBuyer && nextStatus == "completed" {
+			if item.ConvertedOrderID == nil {
+				return errors.New("harvest request can only be completed after conversion to order")
+			}
+		}
+		if isFarmer && nextStatus == "cancelled" {
+			return errors.New("farmers cannot cancel buyer harvest requests")
+		}
+
+		now := time.Now().UTC()
+		item.Status = nextStatus
+		item.FarmerResponseNote = utils.SanitizeString(req.FarmerResponseNote)
+		item.RespondedAt = &now
+		if err := tx.Save(&item).Error; err != nil {
+			return errors.New("failed to update harvest request")
+		}
+		updatedID = item.ID
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.orderRepo.GetHarvestRequestByID(updatedID)
+}
+
+func (s *OrderService) ConvertHarvestRequestToOrder(requestID, buyerID uint, req CreateOrderRequest) (*models.Order, error) {
+	requestItem, err := s.orderRepo.GetHarvestRequestByID(requestID)
+	if err != nil {
+		return nil, errors.New("harvest request not found")
+	}
+	if requestItem.BuyerID != buyerID {
+		return nil, errors.New("unauthorized harvest request access")
+	}
+	if requestItem.Status != "accepted" && requestItem.Status != "ready" {
+		return nil, errors.New("harvest request is not ready for order conversion")
+	}
+	if requestItem.ConvertedOrderID != nil {
+		return nil, errors.New("harvest request has already been converted")
+	}
+	req.ProductID = requestItem.ProductID
+	if req.Quantity <= 0 {
+		req.Quantity = requestItem.RequestedQuantity
+	}
+	if strings.TrimSpace(req.DeliveryAddress) == "" {
+		req.DeliveryAddress = requestItem.DeliveryAddress
+	}
+	if strings.TrimSpace(req.BuyerNote) == "" {
+		req.BuyerNote = requestItem.BuyerNote
+	}
+	if strings.TrimSpace(req.PaymentMethod) == "" {
+		req.PaymentMethod = "cod"
+	}
+	if strings.TrimSpace(req.PreferredDate) == "" {
+		req.PreferredDate = requestItem.PreferredHarvestDate.Format(time.RFC3339)
+	}
+	return s.createInventoryOrder(buyerID, req, "harvest_request", requestItem.ID)
+}
+
 func (s *OrderService) GetOrderByID(id uint) (*models.Order, error) {
 	return s.orderRepo.GetByID(id)
 }
 
 func (s *OrderService) GetOrdersByBuyer(buyerID uint) ([]models.Order, error) {
 	return s.orderRepo.GetByBuyerID(buyerID)
+}
+
+func (s *OrderService) getAccessibleOrder(orderID, userID uint) (*models.Order, error) {
+	order, err := s.orderRepo.GetByID(orderID)
+	if err != nil {
+		return nil, errors.New("order not found")
+	}
+	if order.BuyerID != userID && order.FarmerID != userID {
+		return nil, errors.New("unauthorized access to order")
+	}
+	return order, nil
+}
+
+func (s *OrderService) GetOrderMessages(orderID, userID uint) ([]models.OrderMessage, error) {
+	if _, err := s.getAccessibleOrder(orderID, userID); err != nil {
+		return nil, err
+	}
+	items, err := s.orderRepo.GetOrderMessages(orderID)
+	if err != nil {
+		return nil, errors.New("failed to load order messages")
+	}
+	return items, nil
+}
+
+func (s *OrderService) SendOrderMessage(orderID, userID uint, req SendOrderMessageRequest) ([]models.OrderMessage, error) {
+	order, err := s.getAccessibleOrder(orderID, userID)
+	if err != nil {
+		return nil, err
+	}
+	body := utils.SanitizeString(req.Message)
+	if strings.TrimSpace(body) == "" {
+		return nil, errors.New("message is required")
+	}
+
+	senderRole := "buyer"
+	if order.FarmerID == userID {
+		senderRole = "farmer"
+	}
+	if err := s.orderRepo.CreateOrderMessage(&models.OrderMessage{
+		OrderID:    orderID,
+		SenderID:   userID,
+		SenderRole: senderRole,
+		Message:    body,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		return nil, errors.New("failed to send message")
+	}
+	return s.orderRepo.GetOrderMessages(orderID)
+}
+
+func (s *OrderService) GetDisputeEvidences(orderID, userID uint) ([]models.DisputeEvidence, error) {
+	if _, err := s.getAccessibleOrder(orderID, userID); err != nil {
+		return nil, err
+	}
+	items, err := s.orderRepo.GetDisputeEvidences(orderID)
+	if err != nil {
+		return nil, errors.New("failed to load dispute evidence")
+	}
+	return items, nil
+}
+
+func (s *OrderService) AddDisputeEvidence(orderID, userID uint, req AddDisputeEvidenceRequest) ([]models.DisputeEvidence, error) {
+	order, err := s.getAccessibleOrder(orderID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if order.DisputeStatus == "" || order.DisputeStatus == "none" {
+		return nil, errors.New("open a dispute before attaching evidence")
+	}
+
+	note := utils.SanitizeString(req.Note)
+	url := utils.SanitizeString(req.EvidenceURL)
+	if strings.TrimSpace(note) == "" && strings.TrimSpace(url) == "" {
+		return nil, errors.New("evidence note or evidence url is required")
+	}
+
+	if err := s.orderRepo.CreateDisputeEvidence(&models.DisputeEvidence{
+		OrderID:     orderID,
+		UploadedBy:  userID,
+		EvidenceURL: url,
+		Note:        note,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		return nil, errors.New("failed to save dispute evidence")
+	}
+
+	logNote := note
+	if logNote == "" {
+		logNote = "Evidence attached to dispute"
+	}
+	_ = s.orderRepo.CreateStatusLog(&models.OrderStatusLog{
+		OrderID:    orderID,
+		ActorID:    userID,
+		FromStatus: order.Status,
+		ToStatus:   order.Status,
+		Reason:     "dispute_evidence_added",
+		Category:   order.DisputeStatus,
+		Note:       logNote,
+		CreatedAt:  time.Now().UTC(),
+	})
+	return s.orderRepo.GetDisputeEvidences(orderID)
 }
 
 func (s *OrderService) GetOrdersByFarmer(farmerID uint) ([]models.Order, error) {
@@ -282,6 +705,8 @@ func (s *OrderService) UpdateOrderStatusWithDetails(orderID, userID uint, req Up
 		if order.BuyerID != userID && order.FarmerID != userID {
 			return errors.New("unauthorized: you can only update your own orders")
 		}
+		isBuyerActor := order.BuyerID == userID
+		isFarmerActor := order.FarmerID == userID
 
 		newStatus := strings.TrimSpace(req.Status)
 		if newStatus == "" {
@@ -322,6 +747,25 @@ func (s *OrderService) UpdateOrderStatusWithDetails(orderID, userID uint, req Up
 			}
 			if !allowed {
 				return errors.New("invalid status transition")
+			}
+		}
+
+		if isStatusChange {
+			// Buyer-side actions: cancel order or mark as received.
+			if isBuyerActor {
+				if newStatus != "cancelled" && newStatus != "completed" {
+					return errors.New("buyers can only cancel or mark order as received")
+				}
+				if newStatus == "completed" && oldStatus != "out_for_delivery" {
+					return errors.New("order can be marked received only after out for delivery")
+				}
+			}
+
+			// Farmer-side actions: fulfillment/shipping operations.
+			if isFarmerActor {
+				if newStatus == "completed" {
+					return errors.New("completed status must be confirmed by buyer as received")
+				}
 			}
 		}
 
@@ -399,6 +843,17 @@ func (s *OrderService) UpdateOrderStatusWithDetails(orderID, userID uint, req Up
 			logReason = "dispute_update"
 			logCategory = utils.SanitizeString(req.DisputeStatus)
 			logNote = utils.SanitizeString(req.DisputeNote)
+		} else if isStatusChange {
+			if logReason == "" {
+				logReason = "status_update"
+			}
+			if logCategory == "" {
+				logCategory = "lifecycle"
+			}
+			if newStatus == "completed" && isBuyerActor {
+				logReason = "buyer_received"
+				logNote = "Buyer confirmed delivery received"
+			}
 		}
 
 		if err := tx.Create(&models.OrderStatusLog{
@@ -592,6 +1047,10 @@ func (s *OrderService) GetFarmerNotifications(farmerID uint) ([]FarmerNotificati
 	if err != nil {
 		return nil, errors.New("failed to load farmer notifications")
 	}
+	harvestRequests, err := s.orderRepo.GetHarvestRequestsByFarmer(farmerID)
+	if err != nil {
+		return nil, errors.New("failed to load farmer notifications")
+	}
 	products, err := s.productRepo.GetByFarmerID(farmerID)
 	if err != nil {
 		return nil, errors.New("failed to load farmer notifications")
@@ -622,6 +1081,18 @@ func (s *OrderService) GetFarmerNotifications(farmerID uint) ([]FarmerNotificati
 				Title:     "Order Cancelled",
 				Message:   "Order #" + strconv.FormatUint(uint64(order.ID), 10) + " was cancelled.",
 				CreatedAt: order.CancelledAt.Format(time.RFC3339),
+			})
+		}
+	}
+
+	for _, item := range harvestRequests {
+		if item.Status == "pending" {
+			items = append(items, FarmerNotificationItem{
+				ID:        "harvest-pending-" + strconv.FormatUint(uint64(item.ID), 10),
+				Type:      "harvest_request",
+				Title:     "New Harvest Request",
+				Message:   "Harvest request #" + strconv.FormatUint(uint64(item.ID), 10) + " asks for " + strconv.FormatFloat(item.RequestedQuantity, 'f', 1, 64) + " " + item.Product.Unit + " of " + item.Product.CropName + ".",
+				CreatedAt: item.CreatedAt.Format(time.RFC3339),
 			})
 		}
 	}
@@ -917,6 +1388,10 @@ func (s *OrderService) GetBuyerNotifications(buyerID uint) ([]BuyerNotificationI
 	if err != nil {
 		return nil, errors.New("failed to load buyer notifications")
 	}
+	harvestRequests, err := s.orderRepo.GetHarvestRequestsByBuyer(buyerID)
+	if err != nil {
+		return nil, errors.New("failed to load buyer notifications")
+	}
 
 	now := time.Now().UTC()
 	items := make([]BuyerNotificationItem, 0)
@@ -987,6 +1462,18 @@ func (s *OrderService) GetBuyerNotifications(buyerID uint) ([]BuyerNotificationI
 				Title:     "Dispute Updated",
 				Message:   "Dispute for order #" + orderID + " is " + order.DisputeStatus + ".",
 				CreatedAt: order.UpdatedAt.Format(time.RFC3339),
+			})
+		}
+	}
+
+	for _, item := range harvestRequests {
+		if item.Status == "accepted" || item.Status == "ready" || item.Status == "rejected" {
+			items = append(items, BuyerNotificationItem{
+				ID:        "harvest-" + strconv.FormatUint(uint64(item.ID), 10),
+				Type:      "harvest_request",
+				Title:     "Harvest Request Updated",
+				Message:   "Harvest request #" + strconv.FormatUint(uint64(item.ID), 10) + " is now " + item.Status + ".",
+				CreatedAt: item.UpdatedAt.Format(time.RFC3339),
 			})
 		}
 	}

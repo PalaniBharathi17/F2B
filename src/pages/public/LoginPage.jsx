@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Card, Typography, message, Space, Alert } from 'antd';
+import { Form, Input, Button, Card, Typography, message, Space } from 'antd';
 import { UserOutlined, LockOutlined, ArrowLeftOutlined, MailOutlined, PhoneOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -77,31 +77,6 @@ const LoginPage = () => {
         }
     };
 
-    if (isAdmin) {
-        return (
-            <div className="login-page">
-                <div className="login-container">
-                    <Button
-                        icon={<ArrowLeftOutlined />}
-                        onClick={() => navigate('/role-selection')}
-                        className="back-button-login"
-                    >
-                        Back
-                    </Button>
-                    <Card className="login-card">
-                        <Title level={3}>Admin Login</Title>
-                        <Alert
-                            type="info"
-                            showIcon
-                            message="Admin backend is not implemented yet."
-                            description="Use farmer or buyer login to test frontend-backend integration."
-                        />
-                    </Card>
-                </div>
-            </div>
-        );
-    }
-
     return (
         <div className="login-page">
             <div className="login-container">
@@ -116,7 +91,7 @@ const LoginPage = () => {
                 <Card className="login-card">
                     <div className="login-header">
                         <Title level={2} className="login-title">
-                            {isRegisterMode ? 'Create Account' : 'Welcome Back'}
+                            {isRegisterMode ? 'Create Account' : (isAdmin ? 'Admin Login' : 'Welcome Back')}
                         </Title>
                         <Paragraph className="login-subtitle">
                             {isRegisterMode
@@ -126,7 +101,7 @@ const LoginPage = () => {
                         </Paragraph>
                     </div>
 
-                    {!isRegisterMode ? (
+                    {!isRegisterMode || isAdmin ? (
                         <Form
                             name="email_login"
                             onFinish={onLogin}
@@ -264,12 +239,20 @@ const LoginPage = () => {
                     )}
 
                     <div className="login-footer">
-                        <Text type="secondary" style={{ fontSize: '13px' }}>
-                            {isRegisterMode ? 'Already have an account?' : "Don't have an account?"}{' '}
-                        </Text>
-                        <Button type="link" onClick={() => setIsRegisterMode((prev) => !prev)}>
-                            {isRegisterMode ? 'Login' : 'Register'}
-                        </Button>
+                        {!isAdmin ? (
+                            <>
+                                <Text type="secondary" style={{ fontSize: '13px' }}>
+                                    {isRegisterMode ? 'Already have an account?' : "Don't have an account?"}{' '}
+                                </Text>
+                                <Button type="link" onClick={() => setIsRegisterMode((prev) => !prev)}>
+                                    {isRegisterMode ? 'Login' : 'Register'}
+                                </Button>
+                            </>
+                        ) : (
+                            <Text type="secondary" style={{ fontSize: '13px' }}>
+                                Admin account creation is restricted. Contact platform owner for admin access.
+                            </Text>
+                        )}
                     </div>
                 </Card>
             </div>

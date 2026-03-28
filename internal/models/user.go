@@ -13,6 +13,11 @@ type User struct {
 	Phone     string         `gorm:"uniqueIndex" json:"phone"`
 	Password  string         `gorm:"not null" json:"-"` // Hidden in JSON
 	UserType  string         `gorm:"not null" json:"user_type"` // farmer/buyer
+	IsActive  bool           `gorm:"default:true;index" json:"is_active"`
+	VerificationStatus string `gorm:"default:'verified';index" json:"verification_status"`
+	VerificationNote   string `json:"verification_note"`
+	VerifiedBy         *uint  `json:"verified_by"`
+	VerifiedAt         *time.Time `json:"verified_at"`
 	City      string         `json:"city"`
 	State     string         `json:"state"`
 	CreatedAt time.Time      `json:"created_at"`

@@ -20,7 +20,8 @@ import {
     Select,
     InputNumber,
     Popconfirm,
-    message
+    message,
+    Switch,
 } from 'antd';
 import {
     DashboardOutlined,
@@ -48,11 +49,21 @@ import {
     updateProductPrice,
     updateProductStatus
 } from '../../api/products';
-import { getFarmerOrders } from '../../api/orders';
+import { getFarmerNotifications, getFarmerOrders } from '../../api/orders';
+import { getBackendOrigin } from '../../api/client';
 import './FarmerDashboard.css';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
+
+const getProfileTag = (user) => {
+    const verification = String(user?.verification_status || '').toLowerCase();
+    const badge = String(user?.farmer_profile?.badge || '').toUpperCase();
+    if (verification === 'pending') return { label: 'UNDER REVIEW', color: 'gold' };
+    if (verification === 'rejected') return { label: 'ACTION NEEDED', color: 'red' };
+    if (badge) return { label: badge, color: badge === 'GOLD' ? 'gold' : badge === 'SILVER' ? 'default' : 'orange' };
+    return { label: 'VERIFIED', color: 'green' };
+};
 
 const MyListings = () => {
     const [collapsed, setCollapsed] = useState(false);
@@ -74,10 +85,12 @@ const MyListings = () => {
     const [priceHistory, setPriceHistory] = useState([]);
     const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
     const [actionProductId, setActionProductId] = useState(null);
+    const [notifications, setNotifications] = useState([]);
     const [form] = Form.useForm();
     const [priceForm] = Form.useForm();
     const navigate = useNavigate();
     const { user, logout } = useAuth();
+    const profileTag = getProfileTag(user);
 
     const loadListings = async () => {
         setLoading(true);
@@ -93,11 +106,16 @@ const MyListings = () => {
 
     const loadPendingOrders = async () => {
         try {
-            const data = await getFarmerOrders();
+            const [data, notificationsData] = await Promise.all([
+                getFarmerOrders(),
+                getFarmerNotifications(),
+            ]);
             const count = (data?.orders || []).filter((o) => o.status === 'pending').length;
             setPendingOrders(count);
+            setNotifications(notificationsData?.items || []);
         } catch {
             setPendingOrders(0);
+            setNotifications([]);
         }
     };
 
@@ -130,6 +148,8 @@ const MyListings = () => {
                 if (stockFilter === 'draft') return item.status === 'draft';
                 if (stockFilter === 'sold') return item.status === 'sold';
                 if (stockFilter === 'expired') return item.status === 'expired';
+                if (stockFilter === 'pending_review') return item.status === 'pending_review';
+                if (stockFilter === 'rejected') return item.status === 'rejected';
                 return true;
             })
             .map((item) => ({
@@ -139,9 +159,9 @@ const MyListings = () => {
                 price: Number(item.price_per_unit || 0),
                 unit: item.unit || 'unit',
                 stock: Number(item.quantity || 0),
-                status: item.status || 'active',
+                status: item.status || 'draft',
                 createdAt: item.created_at,
-                image: item.image_url ? `http://localhost:8080${item.image_url}` : 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=100&h=100&fit=crop',
+                image: item.image_url ? `${getBackendOrigin()}${item.image_url}` : 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=100&h=100&fit=crop',
             }))
             .sort((a, b) => {
                 if (sortBy === 'price_asc') return a.price - b.price;
@@ -178,6 +198,10 @@ const MyListings = () => {
             city: item.city || '',
             state: item.state || '',
             status: item.status || 'active',
+            is_bulk_available: Boolean(item.is_bulk_available),
+            minimum_bulk_quantity: Number(item.minimum_bulk_quantity || 0),
+            supports_harvest_request: Boolean(item.supports_harvest_request),
+            harvest_lead_days: Number(item.harvest_lead_days || 0),
         });
     };
 
@@ -196,6 +220,10 @@ const MyListings = () => {
                 city: values.city || '',
                 state: values.state || '',
                 image_url: editingItem.image_url || '',
+                is_bulk_available: Boolean(values.is_bulk_available),
+                minimum_bulk_quantity: Number(values.minimum_bulk_quantity || 0),
+                supports_harvest_request: Boolean(values.supports_harvest_request),
+                harvest_lead_days: Number(values.harvest_lead_days || 0),
             });
             message.success('Listing updated successfully');
             setEditingItem(null);
@@ -349,7 +377,9 @@ const MyListings = () => {
                 if (status === 'sold') color = 'warning';
                 if (status === 'expired') color = 'error';
                 if (status === 'draft') color = 'default';
-                return <Tag color={color}>{status.toUpperCase()}</Tag>;
+                if (status === 'pending_review') color = 'gold';
+                if (status === 'rejected') color = 'red';
+                return <Tag color={color}>{String(status).replaceAll('_', ' ').toUpperCase()}</Tag>;
             }
         },
         {
@@ -375,10 +405,10 @@ const MyListings = () => {
                         menu={{
                             items: [
                                 {
-                                    key: 'active',
-                                    label: 'Publish',
-                                    disabled: record.status === 'active' || actionProductId === record.key,
-                                    onClick: () => handleStatusChange(record, 'active'),
+                                    key: 'pending_review',
+                                    label: 'Submit for Review',
+                                    disabled: record.status === 'pending_review' || actionProductId === record.key,
+                                    onClick: () => handleStatusChange(record, 'pending_review'),
                                 },
                                 {
                                     key: 'draft',
@@ -418,6 +448,19 @@ const MyListings = () => {
         { key: 'orders', icon: <ShoppingOutlined />, label: 'Orders', onClick: () => navigate('/farmer/orders') },
     ];
 
+    const notificationMenuItems = notifications.length
+        ? notifications.slice(0, 8).map((item) => ({
+            key: item.id,
+            label: (
+                <div style={{ maxWidth: 320 }}>
+                    <Text strong>{item.title}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: '12px' }}>{item.message}</Text>
+                </div>
+            ),
+        }))
+        : [{ key: 'empty', label: <Text type="secondary">No new notifications</Text>, disabled: true }];
+
     return (
         <Layout className="farmer-dashboard-layout">
             <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} className="dashboard-sider" width={260}>
@@ -437,11 +480,11 @@ const MyListings = () => {
 
                 <div className="user-profile-section">
                     <div className="user-profile-card">
-                        <Avatar size={40} icon={<UserOutlined />} src="https://i.pravatar.cc/150?img=12" />
+                        <Avatar size={40} icon={<UserOutlined />} />
                         {!collapsed && (
                             <div className="user-info">
                                 <Text strong style={{ color: 'white', fontSize: '14px' }}>{user?.name || 'Farmer'}</Text>
-                                <Tag color="success" style={{ fontSize: '10px', padding: '0 6px' }}>PRO SELLER</Tag>
+                                <Tag color={profileTag.color} style={{ fontSize: '10px', padding: '0 6px' }}>{profileTag.label}</Tag>
                             </div>
                         )}
                     </div>
@@ -469,6 +512,8 @@ const MyListings = () => {
                                 { value: 'all', label: 'All Stock' },
                                 { value: 'active', label: 'Active Only' },
                                 { value: 'draft', label: 'Draft' },
+                                { value: 'pending_review', label: 'Pending Review' },
+                                { value: 'rejected', label: 'Rejected' },
                                 { value: 'sold', label: 'Sold' },
                                 { value: 'expired', label: 'Expired' },
                                 { value: 'low', label: 'Low Stock' },
@@ -487,9 +532,11 @@ const MyListings = () => {
                                 { value: 'stock_desc', label: 'Stock High-Low' },
                             ]}
                         />
-                        <Badge count={pendingOrders} offset={[-5, 5]}>
-                            <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
-                        </Badge>
+                        <Dropdown menu={{ items: notificationMenuItems }} trigger={['click']}>
+                            <Badge count={notifications.length || pendingOrders} offset={[-5, 5]}>
+                                <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
+                            </Badge>
+                        </Dropdown>
                         <Button type="primary" icon={<PlusOutlined />} className="add-produce-btn" onClick={() => navigate('/farmer/add-produce')}>
                             Add New Produce
                         </Button>
@@ -498,7 +545,7 @@ const MyListings = () => {
                                 items: [{ key: 'logout', label: 'Logout', icon: <LogoutOutlined />, onClick: handleLogout }]
                             }}
                         >
-                            <Avatar icon={<UserOutlined />} aria-label="Account menu" src="https://i.pravatar.cc/150?img=12" style={{ cursor: 'pointer' }} />
+                            <Avatar icon={<UserOutlined />} aria-label="Account menu" style={{ cursor: 'pointer' }} />
                         </Dropdown>
                     </div>
                 </Header>
@@ -532,7 +579,7 @@ const MyListings = () => {
                         title="All Listings"
                         extra={(
                             <Space>
-                                <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('active')}>Bulk Publish</Button>
+                                <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('pending_review')}>Submit for Review</Button>
                                 <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('draft')}>Bulk Draft</Button>
                                 <Button loading={bulkSaving} onClick={() => handleBulkStatusChange('expired')}>Bulk Expire</Button>
                             </Space>
@@ -559,6 +606,9 @@ const MyListings = () => {
                         <Text><Text strong>Price:</Text> INR {Number(viewItem.price_per_unit || 0).toFixed(2)} / {viewItem.unit}</Text>
                         <Text><Text strong>Location:</Text> {[viewItem.city, viewItem.state].filter(Boolean).join(', ') || '-'}</Text>
                         <Text><Text strong>Status:</Text> {viewItem.status}</Text>
+                        <Text><Text strong>Bulk Ordering:</Text> {viewItem.is_bulk_available ? `Enabled (min ${viewItem.minimum_bulk_quantity || 0} ${viewItem.unit})` : 'Disabled'}</Text>
+                        <Text><Text strong>Harvest Requests:</Text> {viewItem.supports_harvest_request ? `Enabled (${viewItem.harvest_lead_days || 0} lead days)` : 'Disabled'}</Text>
+                        <Text><Text strong>Moderation Note:</Text> {viewItem.moderation_note || '-'}</Text>
                         <Text><Text strong>Description:</Text> {viewItem.description || '-'}</Text>
                     </Space>
                 )}
@@ -617,6 +667,28 @@ const MyListings = () => {
                                         { value: 'expired', label: 'expired' },
                                     ]}
                                 />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item label="Bulk Available" name="is_bulk_available" valuePropName="checked">
+                                <Switch />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                    <Row gutter={12}>
+                        <Col span={12}>
+                            <Form.Item label="Minimum Bulk Quantity" name="minimum_bulk_quantity">
+                                <InputNumber min={0} step={0.1} style={{ width: '100%' }} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item label="Harvest Lead Days" name="harvest_lead_days">
+                                <InputNumber min={0} style={{ width: '100%' }} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item label="Supports Harvest Request" name="supports_harvest_request" valuePropName="checked">
+                                <Switch />
                             </Form.Item>
                         </Col>
                     </Row>

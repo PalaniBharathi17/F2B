@@ -30,6 +30,20 @@ type AddToCartRequest struct {
 	Quantity  float64 `json:"quantity"`
 }
 
+func deriveCartOrderType(product models.Product, quantity float64) string {
+	if !product.IsBulkAvailable {
+		return "standard"
+	}
+	minQty := product.MinimumBulkQuantity
+	if minQty <= 0 {
+		minQty = product.Quantity
+	}
+	if quantity >= minQty {
+		return "bulk"
+	}
+	return "standard"
+}
+
 func (s *CartService) GetCartItems(buyerID uint) ([]models.CartItem, error) {
 	return s.cartRepo.GetItemsByBuyerID(buyerID)
 }
@@ -126,8 +140,15 @@ func (s *CartService) RemoveItem(buyerID, cartItemID uint) error {
 }
 
 func (s *CartService) Checkout(buyerID uint, deliveryAddress string) ([]models.Order, error) {
+	return s.CheckoutWithPayment(buyerID, deliveryAddress, "cod", "")
+}
+
+func (s *CartService) CheckoutWithPayment(buyerID uint, deliveryAddress, paymentMethod, paymentReference string) ([]models.Order, error) {
 	cleanAddress := strings.TrimSpace(deliveryAddress)
 	createdOrderIDs := make([]uint, 0)
+	if err := validatePayment(paymentMethod, paymentReference); err != nil {
+		return nil, err
+	}
 
 	err := s.orderRepo.GetDB().Transaction(func(tx *gorm.DB) error {
 		var items []models.CartItem
@@ -161,6 +182,10 @@ func (s *CartService) Checkout(buyerID uint, deliveryAddress string) ([]models.O
 				FarmerID:        product.FarmerID,
 				Quantity:        item.Quantity,
 				TotalPrice:      item.Quantity * product.PricePerUnit,
+				OrderType:       deriveCartOrderType(product, item.Quantity),
+				PaymentMethod:   normalizePaymentMethod(paymentMethod),
+				PaymentReference: strings.TrimSpace(paymentReference),
+				PaymentStatus:   derivePaymentStatus(paymentMethod),
 				Status:          "pending",
 				DeliveryAddress: cleanAddress,
 				CreatedAt:       time.Now().UTC(),
@@ -170,6 +195,26 @@ func (s *CartService) Checkout(buyerID uint, deliveryAddress string) ([]models.O
 				return errors.New("failed to create order")
 			}
 			createdOrderIDs = append(createdOrderIDs, order.ID)
+
+			// Initialize timeline with first lifecycle event.
+			logNote := "Order placed through cart checkout"
+			logCategory := "lifecycle"
+			if order.OrderType == "bulk" {
+				logNote = "Bulk order placed through cart checkout"
+				logCategory = "bulk"
+			}
+			if err := tx.Create(&models.OrderStatusLog{
+				OrderID:    order.ID,
+				ActorID:    buyerID,
+				FromStatus: "new",
+				ToStatus:   "pending",
+				Reason:     "order_created",
+				Category:   logCategory,
+				Note:       logNote,
+				CreatedAt:  time.Now().UTC(),
+			}).Error; err != nil {
+				return errors.New("failed to initialize order timeline")
+			}
 
 			product.Quantity -= item.Quantity
 			if product.Quantity <= 0 {

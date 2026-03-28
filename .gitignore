@@ -4,7 +4,8 @@
 *.dll
 *.so
 *.dylib
-server
+/server
+!cmd/server/main.go
 
 # Test binary
 *.test
@@ -14,6 +15,7 @@ server
 
 # Dependency directories
 vendor/
+node_modules/
 
 # Go workspace file
 go.work
@@ -21,9 +23,15 @@ go.work
 # Environment variables
 .env
 
+# Frontend build output
+dist/
+
 # Uploads
-uploads/*
+uploads/
 !uploads/.gitkeep
+
+# Local runtime logs
+tmp_backend_*.log
 
 # IDE
 .idea/

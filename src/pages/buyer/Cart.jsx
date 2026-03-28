@@ -15,6 +15,7 @@ import {
     Empty,
     message,
     Input,
+    Select,
 } from 'antd';
 import {
     ShoppingCartOutlined,
@@ -28,7 +29,9 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { checkoutCart, getCart, removeCartItem, updateCartItem } from '../../api/cart';
+import { deleteMyAddress, getMyAddresses, saveMyAddress } from '../../api/users';
 import { getApiErrorMessage } from '../../utils/apiError';
+import { getBackendOrigin } from '../../api/client';
 import './BuyerDashboard.css';
 
 const { Header, Content } = Layout;
@@ -39,7 +42,7 @@ const fallbackImage = 'https://images.unsplash.com/photo-1592924357228-91a4daadc
 const toImageUrl = (path) => {
     if (!path) return fallbackImage;
     if (path.startsWith('http')) return path;
-    return `http://localhost:8080${path}`;
+    return `${getBackendOrigin()}${path}`;
 };
 
 const Cart = () => {
@@ -47,15 +50,21 @@ const Cart = () => {
     const [updatingId, setUpdatingId] = useState(null);
     const [checkoutLoading, setCheckoutLoading] = useState(false);
     const [deliveryAddress, setDeliveryAddress] = useState('');
+    const [paymentMethod, setPaymentMethod] = useState('cod');
+    const [paymentReference, setPaymentReference] = useState('');
+    const [addresses, setAddresses] = useState([]);
+    const [newAddressLabel, setNewAddressLabel] = useState('');
     const navigate = useNavigate();
     const { logout } = useAuth();
 
     const loadCart = async () => {
         try {
-            const data = await getCart();
+            const [data, addressData] = await Promise.all([getCart(), getMyAddresses()]);
             setCartItems(data?.items || []);
+            setAddresses(addressData?.items || []);
         } catch {
             setCartItems([]);
+            setAddresses([]);
         }
     };
 
@@ -101,12 +110,26 @@ const Cart = () => {
             message.error('Cart is empty');
             return;
         }
+        if (!paymentMethod) {
+            message.error('Select a payment method');
+            return;
+        }
+        if ((paymentMethod === 'upi' || paymentMethod === 'online_banking') && !paymentReference.trim()) {
+            message.error(paymentMethod === 'upi' ? 'Enter UPI ID' : 'Enter bank reference');
+            return;
+        }
         setCheckoutLoading(true);
         try {
-            await checkoutCart({ delivery_address: deliveryAddress.trim() });
+            await checkoutCart({
+                delivery_address: deliveryAddress.trim(),
+                payment_method: paymentMethod,
+                payment_reference: paymentReference.trim(),
+            });
             message.success('Checkout complete');
             await loadCart();
             setDeliveryAddress('');
+            setPaymentMethod('cod');
+            setPaymentReference('');
             navigate('/buyer/orders');
         } catch (error) {
             message.error(getApiErrorMessage(error, 'Checkout failed'));
@@ -115,8 +138,34 @@ const Cart = () => {
         }
     };
 
+    const handleSaveAddress = async () => {
+        if (!deliveryAddress.trim()) {
+            message.error('Enter delivery address first');
+            return;
+        }
+        try {
+            await saveMyAddress({
+                label: newAddressLabel || 'Saved Address',
+                line1: deliveryAddress.trim(),
+                is_default: addresses.length === 0,
+            });
+            setNewAddressLabel('');
+            await loadCart();
+            message.success('Address saved');
+        } catch (error) {
+            message.error(getApiErrorMessage(error, 'Failed to save address'));
+        }
+    };
+
     const subtotal = useMemo(
         () => cartItems.reduce((acc, item) => acc + (Number(item?.product?.price_per_unit || 0) * Number(item.quantity || 0)), 0),
+        [cartItems],
+    );
+    const bulkEligibleItems = useMemo(
+        () => cartItems.filter((item) => {
+            const minQty = Number(item?.product?.minimum_bulk_quantity || 0);
+            return Boolean(item?.product?.is_bulk_available) && Number(item.quantity || 0) >= (minQty > 0 ? minQty : Number(item?.product?.quantity || 0));
+        }),
         [cartItems],
     );
     const shipping = cartItems.length ? Number((subtotal * 0.05).toFixed(2)) : 0;
@@ -191,9 +240,17 @@ const Cart = () => {
                                                                 disabled={updatingId === item.id}
                                                             />
                                                             <Text type="secondary">Stock: {maxQty}</Text>
+                                                            {item?.product?.is_bulk_available && Number(item.quantity || 0) >= Number(item?.product?.minimum_bulk_quantity || maxQty || 0) ? (
+                                                                <Tag color="purple">BULK CHECKOUT</Tag>
+                                                            ) : null}
                                                         </Space>
                                                         <Text strong style={{ fontSize: '18px' }}>INR {lineTotal.toFixed(2)}</Text>
                                                     </div>
+                                                    {item?.product?.supports_harvest_request ? (
+                                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                                            Harvest requests are also enabled for this product if you need future supply beyond current stock.
+                                                        </Text>
+                                                    ) : null}
                                                 </div>
                                             </div>
                                             {index < cartItems.length - 1 ? <Divider style={{ margin: 0 }} /> : null}
@@ -217,6 +274,11 @@ const Cart = () => {
                                     <Title level={3} style={{ margin: 0 }}>Total</Title>
                                     <Title level={3} style={{ margin: 0, color: '#13ec13' }}>INR {total.toFixed(2)}</Title>
                                 </div>
+                                {bulkEligibleItems.length > 0 ? (
+                                    <Paragraph type="secondary" style={{ fontSize: '12px', marginBottom: '12px' }}>
+                                        {bulkEligibleItems.length} cart item(s) meet bulk minimums and will be created as bulk orders at checkout.
+                                    </Paragraph>
+                                ) : null}
                                 <Input.TextArea
                                     rows={3}
                                     placeholder="Delivery address (optional)"
@@ -224,6 +286,56 @@ const Cart = () => {
                                     onChange={(e) => setDeliveryAddress(e.target.value)}
                                     style={{ marginBottom: '16px' }}
                                 />
+                                {addresses.length ? (
+                                    <Select
+                                        placeholder="Use saved address"
+                                        style={{ width: '100%', marginBottom: '16px' }}
+                                        onChange={(value) => setDeliveryAddress(value)}
+                                        options={addresses.map((item) => ({
+                                            value: item.line1,
+                                            label: `${item.label || 'Address'} - ${item.line1}`,
+                                        }))}
+                                    />
+                                ) : null}
+                                <Input
+                                    value={newAddressLabel}
+                                    onChange={(e) => setNewAddressLabel(e.target.value)}
+                                    placeholder="Address label (optional)"
+                                    style={{ marginBottom: '8px' }}
+                                />
+                                <Space style={{ marginBottom: '16px' }}>
+                                    <Button onClick={handleSaveAddress}>Save Address</Button>
+                                    {addresses[0] ? (
+                                        <Button danger onClick={async () => {
+                                            try {
+                                                await deleteMyAddress(addresses[0].id);
+                                                await loadCart();
+                                            } catch (error) {
+                                                message.error(getApiErrorMessage(error, 'Failed to delete address'));
+                                            }
+                                        }}>
+                                            Delete Latest
+                                        </Button>
+                                    ) : null}
+                                </Space>
+                                <Select
+                                    value={paymentMethod}
+                                    onChange={setPaymentMethod}
+                                    style={{ width: '100%', marginBottom: '16px' }}
+                                    options={[
+                                        { value: 'cod', label: 'Cash on Delivery' },
+                                        { value: 'upi', label: 'UPI ID' },
+                                        { value: 'online_banking', label: 'Online Banking' },
+                                    ]}
+                                />
+                                {paymentMethod !== 'cod' ? (
+                                    <Input
+                                        value={paymentReference}
+                                        onChange={(e) => setPaymentReference(e.target.value)}
+                                        placeholder={paymentMethod === 'upi' ? 'Enter UPI ID' : 'Enter bank reference'}
+                                        style={{ marginBottom: '16px' }}
+                                    />
+                                ) : null}
                                 <Button
                                     type="primary"
                                     block

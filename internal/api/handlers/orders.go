@@ -21,6 +21,28 @@ type submitReviewRequest struct {
 	Comment string `json:"comment"`
 }
 
+type harvestRequestPayload struct {
+	ProductID            uint    `json:"product_id"`
+	RequestedQuantity    float64 `json:"requested_quantity"`
+	PreferredHarvestDate string  `json:"preferred_harvest_date"`
+	DeliveryAddress      string  `json:"delivery_address"`
+	BuyerNote            string  `json:"buyer_note"`
+}
+
+type harvestRequestActionPayload struct {
+	Status             string `json:"status"`
+	FarmerResponseNote string `json:"farmer_response_note"`
+}
+
+type orderMessagePayload struct {
+	Message string `json:"message"`
+}
+
+type disputeEvidencePayload struct {
+	Note        string `json:"note"`
+	EvidenceURL string `json:"evidence_url"`
+}
+
 func parsePageLimit(c *gin.Context) (int, int) {
 	page := 1
 	limit := 20
@@ -67,6 +89,119 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	})
 }
 
+func (h *OrderHandler) CreateBulkOrder(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	var req service.CreateOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	order, err := h.orderService.CreateBulkOrder(userIDUint, req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Bulk order created successfully",
+		"order":   order,
+	})
+}
+
+func (h *OrderHandler) CreateHarvestRequest(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+
+	var req harvestRequestPayload
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	item, err := h.orderService.CreateHarvestRequest(userIDUint, service.CreateHarvestRequestRequest{
+		ProductID:            req.ProductID,
+		RequestedQuantity:    req.RequestedQuantity,
+		PreferredHarvestDate: req.PreferredHarvestDate,
+		DeliveryAddress:      req.DeliveryAddress,
+		BuyerNote:            req.BuyerNote,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"message": "Harvest request created successfully", "request": item})
+}
+
+func (h *OrderHandler) GetBuyerHarvestRequests(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	items, err := h.orderService.GetHarvestRequestsByBuyer(userID.(uint))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load harvest requests"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *OrderHandler) GetFarmerHarvestRequests(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	items, err := h.orderService.GetHarvestRequestsByFarmer(userID.(uint))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load harvest requests"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *OrderHandler) UpdateHarvestRequest(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request ID"})
+		return
+	}
+
+	var req harvestRequestActionPayload
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	item, err := h.orderService.UpdateHarvestRequest(uint(id), userIDUint, service.UpdateHarvestRequestRequest{
+		Status:             req.Status,
+		FarmerResponseNote: req.FarmerResponseNote,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Harvest request updated successfully", "request": item})
+}
+
+func (h *OrderHandler) ConvertHarvestRequestToOrder(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	userIDUint := userID.(uint)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request ID"})
+		return
+	}
+
+	var req service.CreateOrderRequest
+	_ = c.ShouldBindJSON(&req)
+
+	order, err := h.orderService.ConvertHarvestRequestToOrder(uint(id), userIDUint, req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"message": "Harvest request converted successfully", "order": order})
+}
+
 func (h *OrderHandler) GetOrder(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	userIDUint := userID.(uint)
@@ -87,6 +222,87 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"order": order})
+}
+
+func (h *OrderHandler) GetOrderMessages(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+
+	items, err := h.orderService.GetOrderMessages(uint(id), userID.(uint))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *OrderHandler) SendOrderMessage(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+
+	var req orderMessagePayload
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	items, err := h.orderService.SendOrderMessage(uint(id), userID.(uint), service.SendOrderMessageRequest{
+		Message: req.Message,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"message": "Message sent successfully", "items": items})
+}
+
+func (h *OrderHandler) GetDisputeEvidences(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+
+	items, err := h.orderService.GetDisputeEvidences(uint(id), userID.(uint))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *OrderHandler) AddDisputeEvidence(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order ID"})
+		return
+	}
+
+	var req disputeEvidencePayload
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	items, err := h.orderService.AddDisputeEvidence(uint(id), userID.(uint), service.AddDisputeEvidenceRequest{
+		Note:        req.Note,
+		EvidenceURL: req.EvidenceURL,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"message": "Dispute evidence added successfully", "items": items})
 }
 
 func (h *OrderHandler) GetMyOrders(c *gin.Context) {

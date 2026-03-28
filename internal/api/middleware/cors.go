@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"net/http"
+	"os"
 	"strings"
 
 	"github.com/f2b-portal/backend/pkg/config"
@@ -11,7 +13,10 @@ func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		origin := strings.TrimSpace(c.Request.Header.Get("Origin"))
 		normalizedOrigin := strings.TrimRight(origin, "/")
-		frontendURL := config.AppConfig.FrontendURL
+		frontendURL := ""
+		if config.AppConfig != nil {
+			frontendURL = config.AppConfig.FrontendURL
+		}
 		normalizedFrontendURL := strings.TrimRight(strings.TrimSpace(frontendURL), "/")
 
 		allowedOrigins := map[string]bool{
@@ -21,7 +26,7 @@ func CORSMiddleware() gin.HandlerFunc {
 			"https://localhost:5173": true,
 			"https://127.0.0.1:5173": true,
 		}
-		allowAll := strings.TrimSpace(frontendURL) == "*"
+		allowAll := strings.TrimSpace(frontendURL) == "*" || os.Getenv("ALLOW_ALL_CORS") == "1"
 
 		// In local development, always echo browser origin to prevent localhost/127 mismatch issues.
 		if normalizedOrigin != "" && (allowAll || allowedOrigins[normalizedOrigin] ||
@@ -35,7 +40,7 @@ func CORSMiddleware() gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
 		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 

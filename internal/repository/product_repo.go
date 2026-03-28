@@ -2,6 +2,7 @@ package repository
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/f2b-portal/backend/internal/models"
 	"gorm.io/gorm"
@@ -9,10 +10,20 @@ import (
 
 type ProductRepository struct {
 	db *gorm.DB
+
+	categoryColumnOnce sync.Once
+	hasCategoryColumn  bool
 }
 
 func NewProductRepository(db *gorm.DB) *ProductRepository {
 	return &ProductRepository{db: db}
+}
+
+func (r *ProductRepository) supportsCategoryColumn() bool {
+	r.categoryColumnOnce.Do(func() {
+		r.hasCategoryColumn = r.db.Migrator().HasColumn(&models.Product{}, "Category")
+	})
+	return r.hasCategoryColumn
 }
 
 func (r *ProductRepository) Create(product *models.Product) error {
@@ -46,7 +57,11 @@ func (r *ProductRepository) GetAll(filters map[string]interface{}, page, limit i
 	}
 	if category, ok := filters["category"].(string); ok && strings.TrimSpace(category) != "" {
 		cat := strings.ToLower(strings.TrimSpace(category))
-		query = query.Where("(LOWER(category) = ? OR LOWER(description) LIKE ?)", cat, "%category: "+cat+"%")
+		if r.supportsCategoryColumn() {
+			query = query.Where("(LOWER(category) = ? OR LOWER(description) LIKE ?)", cat, "%category: "+cat+"%")
+		} else {
+			query = query.Where("LOWER(description) LIKE ?", "%category: "+cat+"%")
+		}
 	}
 	if minPrice, ok := filters["min_price"].(float64); ok {
 		query = query.Where("price_per_unit >= ?", minPrice)

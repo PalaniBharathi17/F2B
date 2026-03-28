@@ -143,14 +143,24 @@ func DeleteImage(url string) error {
 		url = url[1:]
 	}
 
+	// Security: only allow deletes within the uploads directory to prevent path traversal.
+	cleanRel := filepath.Clean(url)
+	uploadsPrefix := UploadsDir + string(filepath.Separator)
+	if cleanRel == UploadsDir {
+		return nil
+	}
+	if !strings.HasPrefix(cleanRel, uploadsPrefix) {
+		return fmt.Errorf("invalid image path")
+	}
+
 	// Delete main image
-	if err := os.Remove(url); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(cleanRel); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
 	// Delete thumbnail
-	dir := filepath.Dir(url)
-	filename := filepath.Base(url)
+	dir := filepath.Dir(cleanRel)
+	filename := filepath.Base(cleanRel)
 	thumbPath := filepath.Join(dir, "thumb_"+filename)
 	if err := os.Remove(thumbPath); err != nil && !os.IsNotExist(err) {
 		// Ignore thumbnail deletion errors

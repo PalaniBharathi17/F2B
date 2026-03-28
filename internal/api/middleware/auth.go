@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/f2b-portal/backend/internal/repository"
 	"github.com/f2b-portal/backend/internal/utils"
+	"github.com/f2b-portal/backend/pkg/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,6 +36,16 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		// Set user info in context
+		if db := config.GetDB(); db != nil {
+			userRepo := repository.NewUserRepository(db)
+			user, userErr := userRepo.GetByID(claims.UserID)
+			if userErr != nil || !user.IsActive {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Account is inactive"})
+				c.Abort()
+				return
+			}
+			c.Set("verification_status", user.VerificationStatus)
+		}
 		c.Set("user_id", claims.UserID)
 		c.Set("email", claims.Email)
 		c.Set("user_type", claims.UserType)
@@ -59,6 +71,18 @@ func BuyerOnly() gin.HandlerFunc {
 		userType, exists := c.Get("user_type")
 		if !exists || userType != "buyer" {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Only buyers can access this resource"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func AdminOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userType, exists := c.Get("user_type")
+		if !exists || userType != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Only admins can access this resource"})
 			c.Abort()
 			return
 		}

@@ -1,60 +1,56 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import LandingPage from './pages/public/LandingPage';
-import RoleSelection from './pages/public/RoleSelection';
-import LoginPage from './pages/public/LoginPage';
+import RequireRole from './components/RequireRole';
 
-// Farmer Pages
-import FarmerDashboard from './pages/farmer/FarmerDashboard';
-import AddProduce from './pages/farmer/AddProduce';
-import MyListings from './pages/farmer/MyListings';
-import FarmerOrders from './pages/farmer/FarmerOrders';
+const LandingPage = lazy(() => import('./pages/public/LandingPage'));
+const RoleSelection = lazy(() => import('./pages/public/RoleSelection'));
+const LoginPage = lazy(() => import('./pages/public/LoginPage'));
 
-// Buyer Pages
-import BuyerDashboard from './pages/buyer/BuyerDashboard';
-import BrowseProducts from './pages/buyer/BrowseProducts';
-import FarmerList from './pages/buyer/FarmerList';
-import BuyerOrders from './pages/buyer/BuyerOrders';
-import Cart from './pages/buyer/Cart';
+const FarmerDashboard = lazy(() => import('./pages/farmer/FarmerDashboard'));
+const AddProduce = lazy(() => import('./pages/farmer/AddProduce'));
+const MyListings = lazy(() => import('./pages/farmer/MyListings'));
+const FarmerOrders = lazy(() => import('./pages/farmer/FarmerOrders'));
 
-// Admin Pages
-import AdminDashboard from './pages/admin/AdminDashboard';
-import UserManagement from './pages/admin/UserManagement';
-import ProductModeration from './pages/admin/ProductModeration';
-import Transactions from './pages/admin/Transactions';
-import ReportsIssues from './pages/admin/ReportsIssues';
+const BuyerDashboard = lazy(() => import('./pages/buyer/BuyerDashboard'));
+const BrowseProducts = lazy(() => import('./pages/buyer/BrowseProducts'));
+const FarmerList = lazy(() => import('./pages/buyer/FarmerList'));
+const BuyerOrders = lazy(() => import('./pages/buyer/BuyerOrders'));
+const Cart = lazy(() => import('./pages/buyer/Cart'));
 
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
+const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
+const ProductModeration = lazy(() => import('./pages/admin/ProductModeration'));
+const Transactions = lazy(() => import('./pages/admin/Transactions'));
+const ReportsIssues = lazy(() => import('./pages/admin/ReportsIssues'));
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<LandingPage />} />
-      <Route path="/role-selection" element={<RoleSelection />} />
-      <Route path="/login" element={<LoginPage />} />
+    <Suspense fallback={null}>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/role-selection" element={<RoleSelection />} />
+        <Route path="/login" element={<LoginPage />} />
 
-      {/* Farmer Routes */}
-      <Route path="/farmer/dashboard" element={<FarmerDashboard />} />
-      <Route path="/farmer/add-produce" element={<AddProduce />} />
-      <Route path="/farmer/listings" element={<MyListings />} />
-      <Route path="/farmer/orders" element={<FarmerOrders />} />
+        <Route path="/farmer/dashboard" element={<RequireRole role="farmer"><FarmerDashboard /></RequireRole>} />
+        <Route path="/farmer/add-produce" element={<RequireRole role="farmer"><AddProduce /></RequireRole>} />
+        <Route path="/farmer/listings" element={<RequireRole role="farmer"><MyListings /></RequireRole>} />
+        <Route path="/farmer/orders" element={<RequireRole role="farmer"><FarmerOrders /></RequireRole>} />
 
-      {/* Buyer Routes */}
-      <Route path="/buyer/dashboard" element={<BuyerDashboard />} />
-      <Route path="/buyer/browse" element={<BrowseProducts />} />
-      <Route path="/buyer/farmers" element={<FarmerList />} />
-      <Route path="/buyer/orders" element={<BuyerOrders />} />
-      <Route path="/buyer/cart" element={<Cart />} />
+        <Route path="/buyer/dashboard" element={<RequireRole role="buyer"><BuyerDashboard /></RequireRole>} />
+        <Route path="/buyer/browse" element={<RequireRole role="buyer"><BrowseProducts /></RequireRole>} />
+        <Route path="/buyer/farmers" element={<RequireRole role="buyer"><FarmerList /></RequireRole>} />
+        <Route path="/buyer/orders" element={<RequireRole role="buyer"><BuyerOrders /></RequireRole>} />
+        <Route path="/buyer/cart" element={<RequireRole role="buyer"><Cart /></RequireRole>} />
 
-      {/* Admin Routes */}
-      <Route path="/admin/dashboard" element={<AdminDashboard />} />
-      <Route path="/admin/users" element={<UserManagement />} />
-      <Route path="/admin/products" element={<ProductModeration />} />
-      <Route path="/admin/transactions" element={<Transactions />} />
-      <Route path="/admin/reports" element={<ReportsIssues />} />
+        <Route path="/admin/dashboard" element={<RequireRole role="admin"><AdminDashboard /></RequireRole>} />
+        <Route path="/admin/users" element={<RequireRole role="admin"><UserManagement /></RequireRole>} />
+        <Route path="/admin/products" element={<RequireRole role="admin"><ProductModeration /></RequireRole>} />
+        <Route path="/admin/transactions" element={<RequireRole role="admin"><Transactions /></RequireRole>} />
+        <Route path="/admin/reports" element={<RequireRole role="admin"><ReportsIssues /></RequireRole>} />
 
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }
 

@@ -26,5 +26,5 @@ func SanitizeString(s string) string {
 }
 
 func IsValidUserType(userType string) bool {
-	return userType == "farmer" || userType == "buyer"
+	return userType == "farmer" || userType == "buyer" || userType == "admin"
 }

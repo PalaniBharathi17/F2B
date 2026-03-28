@@ -16,6 +16,9 @@ type Claims struct {
 }
 
 func GenerateToken(userID uint, email, userType string) (string, error) {
+	if config.AppConfig == nil || config.AppConfig.JWTSecret == "" {
+		return "", errors.New("server configuration not loaded")
+	}
 	claims := &Claims{
 		UserID:   userID,
 		Email:    email,
@@ -32,6 +35,9 @@ func GenerateToken(userID uint, email, userType string) (string, error) {
 }
 
 func ValidateToken(tokenString string) (*Claims, error) {
+	if config.AppConfig == nil || config.AppConfig.JWTSecret == "" {
+		return nil, errors.New("server configuration not loaded")
+	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("invalid signing method")

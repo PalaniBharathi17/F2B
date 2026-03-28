@@ -1,6 +1,11 @@
 package api
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/f2b-portal/backend/internal/api/handlers"
 	"github.com/f2b-portal/backend/internal/api/middleware"
 	"github.com/f2b-portal/backend/internal/repository"
@@ -14,11 +19,39 @@ func SetupRoutes() *gin.Engine {
 
 	// Middleware
 	router.Use(middleware.CORSMiddleware())
-	router.Use(gin.Logger())
-	router.Use(gin.Recovery())
+	// Note: gin.Default() already includes Logger + Recovery.
 
 	// Serve static files (uploads)
 	router.Static("/uploads", "./uploads")
+
+	// Serve built frontend if present (optional).
+	// This makes the project "single-process" in production: `go run ...` serves both API and UI.
+	if _, err := os.Stat("./dist/index.html"); err == nil {
+		router.Static("/assets", "./dist/assets")
+		router.StaticFile("/", "./dist/index.html")
+		router.StaticFile("/index.html", "./dist/index.html")
+		router.NoRoute(func(c *gin.Context) {
+			// Only fall back to SPA for non-API GET requests
+			if c.Request.Method != http.MethodGet {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+			path := c.Request.URL.Path
+			if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/uploads/") || strings.HasPrefix(path, "/assets/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+			// If a real file exists in dist (e.g., favicon), serve it; otherwise serve index.html.
+			distPath := filepath.Clean(filepath.Join("dist", path))
+			if strings.HasPrefix(distPath, "dist"+string(filepath.Separator)) {
+				if _, err := os.Stat(distPath); err == nil {
+					c.File(distPath)
+					return
+				}
+			}
+			c.File("./dist/index.html")
+		})
+	}
 
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(config.GetDB())
@@ -33,12 +66,13 @@ func SetupRoutes() *gin.Engine {
 	trustScoreService := service.NewTrustScoreService(userRepo, orderRepo)
 	cartService := service.NewCartService(cartRepo, productRepo, orderRepo)
 	adminService := service.NewAdminService(userRepo, productRepo, orderRepo)
+	userPortalService := service.NewUserPortalService(userRepo, productRepo, orderRepo)
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService)
 	productHandler := handlers.NewProductHandler(productService)
 	orderHandler := handlers.NewOrderHandler(orderService)
-	userHandler := handlers.NewUserHandler(trustScoreService)
+	userHandler := handlers.NewUserHandler(trustScoreService, userPortalService)
 	uploadHandler := handlers.NewUploadHandler()
 	cartHandler := handlers.NewCartHandler(cartService)
 	adminHandler := handlers.NewAdminHandler(adminService)
@@ -76,12 +110,22 @@ func SetupRoutes() *gin.Engine {
 		orders.Use(middleware.AuthMiddleware())
 		{
 			orders.POST("", middleware.BuyerOnly(), orderHandler.CreateOrder)
+			orders.POST("/bulk", middleware.BuyerOnly(), orderHandler.CreateBulkOrder)
+			orders.POST("/harvest-requests", middleware.BuyerOnly(), orderHandler.CreateHarvestRequest)
 			orders.GET("/:id", orderHandler.GetOrder)
+			orders.GET("/:id/messages", orderHandler.GetOrderMessages)
+			orders.POST("/:id/messages", orderHandler.SendOrderMessage)
+			orders.GET("/:id/dispute/evidence", orderHandler.GetDisputeEvidences)
+			orders.POST("/:id/dispute/evidence", orderHandler.AddDisputeEvidence)
 			orders.GET("/my/orders", middleware.BuyerOnly(), orderHandler.GetMyOrders)
+			orders.GET("/my/harvest-requests", middleware.BuyerOnly(), orderHandler.GetBuyerHarvestRequests)
 			orders.GET("/my/reviews", middleware.BuyerOnly(), orderHandler.GetBuyerReviews)
 			orders.GET("/my/notifications", middleware.BuyerOnly(), orderHandler.GetBuyerNotifications)
+			orders.POST("/harvest-requests/:id/convert", middleware.BuyerOnly(), orderHandler.ConvertHarvestRequestToOrder)
+			orders.PATCH("/harvest-requests/:id", orderHandler.UpdateHarvestRequest)
 			orders.POST("/:id/review", middleware.BuyerOnly(), orderHandler.SubmitBuyerReview)
 			orders.GET("/farmer/orders", middleware.FarmerOnly(), orderHandler.GetFarmerOrders)
+			orders.GET("/farmer/harvest-requests", middleware.FarmerOnly(), orderHandler.GetFarmerHarvestRequests)
 			orders.GET("/farmer/payout-summary", middleware.FarmerOnly(), orderHandler.GetFarmerPayoutSummary)
 			orders.GET("/farmer/analytics", middleware.FarmerOnly(), orderHandler.GetFarmerAnalytics)
 			orders.GET("/farmer/notifications", middleware.FarmerOnly(), orderHandler.GetFarmerNotifications)
@@ -104,6 +148,13 @@ func SetupRoutes() *gin.Engine {
 		{
 			users.GET("/:id/trust-score", userHandler.GetTrustScore)
 			users.GET("/farmers", userHandler.GetFarmers)
+			users.GET("/me/addresses", middleware.AuthMiddleware(), userHandler.GetMyAddresses)
+			users.POST("/me/addresses", middleware.AuthMiddleware(), userHandler.SaveAddress)
+			users.DELETE("/me/addresses/:id", middleware.AuthMiddleware(), userHandler.DeleteAddress)
+			users.GET("/me/favorites", middleware.AuthMiddleware(), middleware.BuyerOnly(), userHandler.GetFavorites)
+			users.POST("/me/favorites/:product_id", middleware.AuthMiddleware(), middleware.BuyerOnly(), userHandler.ToggleFavorite)
+			users.GET("/me/documents", middleware.AuthMiddleware(), userHandler.GetMyVerificationDocuments)
+			users.POST("/me/documents", middleware.AuthMiddleware(), userHandler.UploadVerificationDocument)
 		}
 
 		// Cart (buyer only)
@@ -127,12 +178,27 @@ func SetupRoutes() *gin.Engine {
 
 		// Admin data endpoints
 		admin := api.Group("/admin")
+		admin.Use(middleware.AuthMiddleware(), middleware.AdminOnly())
 		{
 			admin.GET("/overview", adminHandler.GetOverview)
 			admin.GET("/users", adminHandler.GetUsers)
+			admin.PATCH("/users/:id/status", adminHandler.UpdateUserStatus)
+			admin.PATCH("/users/:id/verification", adminHandler.UpdateUserVerification)
 			admin.GET("/products", adminHandler.GetProducts)
+			admin.PATCH("/products/:id/moderation", adminHandler.UpdateProductModeration)
 			admin.GET("/transactions", adminHandler.GetTransactions)
+			admin.GET("/transactions/export", adminHandler.ExportTransactionsCSV)
+			admin.GET("/transactions/:id/invoice", adminHandler.GetTransactionInvoice)
+			admin.GET("/harvest-requests", adminHandler.GetHarvestRequests)
 			admin.GET("/reports", adminHandler.GetReports)
+			admin.POST("/reports/action", adminHandler.ResolveReportAction)
+			admin.PATCH("/reports/:id/resolve", adminHandler.ResolveReport)
+			admin.POST("/reports/:id/resolve", adminHandler.ResolveReport)
+			admin.PATCH("/reports/:id", adminHandler.ResolveReport)
+			admin.POST("/reports/:id", adminHandler.ResolveReport)
+			admin.GET("/novelty-analytics", adminHandler.GetNoveltyAnalytics)
+			admin.GET("/verification-documents", userHandler.GetAllVerificationDocuments)
+			admin.PATCH("/verification-documents/:id", userHandler.ReviewVerificationDocument)
 		}
 	}
 

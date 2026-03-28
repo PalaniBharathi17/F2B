@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import dayjs from 'dayjs';
 import {
     Layout,
     Menu,
@@ -21,6 +22,9 @@ import {
     Form,
     Select,
     DatePicker,
+    Timeline,
+    Steps,
+    Divider,
 } from 'antd';
 import {
     DashboardOutlined,
@@ -39,7 +43,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
     getFarmerOrders,
+    getFarmerHarvestRequests,
     getFarmerPayoutSummary,
+    getFarmerNotifications,
     getFarmerInvoice,
     getFarmerDisputes,
     updateOrderStatus,
@@ -52,11 +58,42 @@ import {
     getFarmerWeeklySummary,
     getFarmerMonthlySummary,
     exportFarmerReport,
+    updateHarvestRequest,
+    getOrderMessages,
+    sendOrderMessage,
+    getDisputeEvidence,
+    addDisputeEvidence,
 } from '../../api/orders';
 import './FarmerDashboard.css';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
+
+const statusSteps = ['pending', 'confirmed', 'packed', 'out_for_delivery', 'completed'];
+
+const humanizeStatus = (value) => {
+    const v = String(value || '').trim();
+    if (!v) return '-';
+    return v.replaceAll('_', ' ').toUpperCase();
+};
+
+const statusTag = (status) => {
+    const s = String(status || '').toLowerCase();
+    let color = 'default';
+    if (s === 'pending') color = 'warning';
+    if (s === 'confirmed') color = 'processing';
+    if (s === 'packed') color = 'cyan';
+    if (s === 'out_for_delivery') color = 'geekblue';
+    if (s === 'completed') color = 'success';
+    if (s === 'cancelled') color = 'error';
+    return <Tag color={color}>{humanizeStatus(s)}</Tag>;
+};
+
+const getStepIndex = (status) => {
+    const s = String(status || '').toLowerCase();
+    const idx = statusSteps.indexOf(s);
+    return idx >= 0 ? idx : 0;
+};
 
 const FarmerOrders = () => {
     const [collapsed, setCollapsed] = useState(false);
@@ -75,6 +112,7 @@ const FarmerOrders = () => {
     const [historyModalOpen, setHistoryModalOpen] = useState(false);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [historyItems, setHistoryItems] = useState([]);
+    const [historyTargetOrderId, setHistoryTargetOrderId] = useState(null);
     const [actionOrderId, setActionOrderId] = useState(null);
     const [disputeModalOpen, setDisputeModalOpen] = useState(false);
     const [disputeAction, setDisputeAction] = useState('');
@@ -85,6 +123,18 @@ const FarmerOrders = () => {
     const [weeklySummary, setWeeklySummary] = useState(null);
     const [monthlySummary, setMonthlySummary] = useState(null);
     const [exportingType, setExportingType] = useState('');
+    const [notifications, setNotifications] = useState([]);
+    const [harvestRequests, setHarvestRequests] = useState([]);
+    const [messageModalOpen, setMessageModalOpen] = useState(false);
+    const [messageTargetOrderId, setMessageTargetOrderId] = useState(null);
+    const [messageItems, setMessageItems] = useState([]);
+    const [messageLoading, setMessageLoading] = useState(false);
+    const [messageSubmitting, setMessageSubmitting] = useState(false);
+    const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
+    const [evidenceTargetOrderId, setEvidenceTargetOrderId] = useState(null);
+    const [evidenceItems, setEvidenceItems] = useState([]);
+    const [evidenceLoading, setEvidenceLoading] = useState(false);
+    const [evidenceSubmitting, setEvidenceSubmitting] = useState(false);
     const [payoutSummary, setPayoutSummary] = useState({
         completed_orders: 0,
         pending_settlement: 0,
@@ -96,6 +146,8 @@ const FarmerOrders = () => {
     const [cancelForm] = Form.useForm();
     const [scheduleForm] = Form.useForm();
     const [disputeForm] = Form.useForm();
+    const [messageForm] = Form.useForm();
+    const [evidenceForm] = Form.useForm();
     const navigate = useNavigate();
     const { user, logout } = useAuth();
 
@@ -132,15 +184,18 @@ const FarmerOrders = () => {
 
     const loadReviewsAndDisputes = async () => {
         try {
-            const [reviewsData, disputesData] = await Promise.all([
+            const [reviewsData, disputesData, harvestData] = await Promise.all([
                 getFarmerReviews({ page: 1, limit: 5 }),
                 getFarmerDisputes({ page: 1, limit: 5 }),
+                getFarmerHarvestRequests(),
             ]);
             setReviewItems(reviewsData?.items || []);
             setDisputeItems(disputesData?.orders || []);
+            setHarvestRequests(harvestData?.items || []);
         } catch {
             setReviewItems([]);
             setDisputeItems([]);
+            setHarvestRequests([]);
         }
     };
 
@@ -158,11 +213,21 @@ const FarmerOrders = () => {
         }
     };
 
+    const loadNotifications = async () => {
+        try {
+            const data = await getFarmerNotifications();
+            setNotifications(data?.items || []);
+        } catch {
+            setNotifications([]);
+        }
+    };
+
     useEffect(() => {
         loadOrders();
         loadPayoutSummary();
         loadReviewsAndDisputes();
         loadPeriodSummaries();
+        loadNotifications();
     }, []);
 
     const handleLogout = () => {
@@ -199,6 +264,7 @@ const FarmerOrders = () => {
                 items: `${order.quantity} ${order?.product?.unit || 'unit'} ${order?.product?.crop_name || 'Produce'}`,
                 amount: `INR ${Number(order.total_price || 0).toFixed(2)}`,
                 amountValue: Number(order.total_price || 0),
+                orderType: order.order_type || 'standard',
                 status: order.status,
                 deliveryDate: order.delivery_date,
                 deliverySlot: order.delivery_slot,
@@ -234,7 +300,6 @@ const FarmerOrders = () => {
         }
         if (status === 'out_for_delivery') {
             return [
-                { key: 'completed', label: 'Mark Completed' },
                 { key: 'cancelled', label: 'Cancel Order' },
             ];
         }
@@ -320,6 +385,7 @@ const FarmerOrders = () => {
         try {
             setHistoryModalOpen(true);
             setHistoryLoading(true);
+            setHistoryTargetOrderId(orderId);
             const data = await getOrderStatusHistory(orderId, { page: 1, limit: 50 });
             setHistoryItems(data?.logs || []);
         } catch {
@@ -328,6 +394,36 @@ const FarmerOrders = () => {
             setHistoryLoading(false);
         }
     };
+
+    const timelineItems = useMemo(() => {
+        const sorted = [...(historyItems || [])].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        return sorted.map((item) => {
+            const to = String(item.to_status || '').toLowerCase();
+            const reason = item.reason ? String(item.reason).replaceAll('_', ' ') : '';
+            const note = String(item.note || '').trim();
+            const title = reason ? reason.toUpperCase() : 'UPDATE';
+            const subtitle = [
+                item.from_status ? `FROM ${humanizeStatus(item.from_status)}` : '',
+                item.to_status ? `TO ${humanizeStatus(item.to_status)}` : '',
+                item.category ? String(item.category).toUpperCase() : '',
+            ].filter(Boolean).join(' | ');
+
+            return {
+                key: item.id,
+                dot: statusTag(to),
+                children: (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Text strong>{title}</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>{subtitle}</Text>
+                        {note ? <Text style={{ fontSize: 13 }}>{note}</Text> : null}
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                            {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
+                        </Text>
+                    </div>
+                ),
+            };
+        });
+    }, [historyItems]);
 
     const openDisputeModal = (orderId, action) => {
         setDisputeTargetOrderId(orderId);
@@ -398,6 +494,74 @@ const FarmerOrders = () => {
         }
     };
 
+    const openMessages = async (orderId) => {
+        setMessageTargetOrderId(orderId);
+        setMessageModalOpen(true);
+        setMessageLoading(true);
+        try {
+            const data = await getOrderMessages(orderId);
+            setMessageItems(data?.items || []);
+        } catch (error) {
+            setMessageItems([]);
+            message.error(error?.response?.data?.error || 'Failed to load messages');
+        } finally {
+            setMessageLoading(false);
+        }
+    };
+
+    const handleSendMessage = async () => {
+        if (!messageTargetOrderId) return;
+        try {
+            const values = await messageForm.validateFields();
+            setMessageSubmitting(true);
+            const data = await sendOrderMessage(messageTargetOrderId, { message: values.message });
+            setMessageItems(data?.items || []);
+            messageForm.resetFields();
+            message.success('Message sent');
+        } catch (error) {
+            if (error?.errorFields) return;
+            message.error(error?.response?.data?.error || 'Failed to send message');
+        } finally {
+            setMessageSubmitting(false);
+        }
+    };
+
+    const openEvidence = async (orderId) => {
+        setEvidenceTargetOrderId(orderId);
+        setEvidenceModalOpen(true);
+        setEvidenceLoading(true);
+        try {
+            const data = await getDisputeEvidence(orderId);
+            setEvidenceItems(data?.items || []);
+        } catch (error) {
+            setEvidenceItems([]);
+            message.error(error?.response?.data?.error || 'Failed to load evidence');
+        } finally {
+            setEvidenceLoading(false);
+        }
+    };
+
+    const handleAddEvidence = async () => {
+        if (!evidenceTargetOrderId) return;
+        try {
+            const values = await evidenceForm.validateFields();
+            setEvidenceSubmitting(true);
+            const data = await addDisputeEvidence(evidenceTargetOrderId, {
+                note: values.note || '',
+                evidence_url: values.evidence_url || '',
+            });
+            setEvidenceItems(data?.items || []);
+            evidenceForm.resetFields();
+            message.success('Evidence added');
+            await Promise.all([loadOrders(), loadReviewsAndDisputes()]);
+        } catch (error) {
+            if (error?.errorFields) return;
+            message.error(error?.response?.data?.error || 'Failed to add evidence');
+        } finally {
+            setEvidenceSubmitting(false);
+        }
+    };
+
     const handleExportReport = async (type) => {
         try {
             setExportingType(type);
@@ -420,6 +584,22 @@ const FarmerOrders = () => {
         }
     };
 
+    const handleHarvestRequestAction = async (requestId, status) => {
+        try {
+            setActionOrderId(`harvest-${requestId}`);
+            await updateHarvestRequest(requestId, {
+                status,
+                farmer_response_note: status === 'accepted' ? 'Farmer accepted the harvest target.' : status === 'ready' ? 'Requested harvest quantity is ready for buyer order conversion.' : 'Farmer cannot fulfill this harvest request.',
+            });
+            message.success('Harvest request updated');
+            await Promise.all([loadReviewsAndDisputes(), loadNotifications()]);
+        } catch (error) {
+            message.error(error?.response?.data?.error || 'Failed to update harvest request');
+        } finally {
+            setActionOrderId(null);
+        }
+    };
+
     const activeOrders = ordersData.filter((o) => o.status !== 'completed' && o.status !== 'cancelled').length;
     const overdueOrders = ordersData.filter((o) => {
         const ageHours = Math.floor((Date.now() - new Date(o.created_at).getTime()) / (1000 * 60 * 60));
@@ -432,6 +612,8 @@ const FarmerOrders = () => {
         .filter((o) => o.status === 'completed')
         .reduce((sum, o) => sum + Number(o.total_price || 0), 0);
     const completedCount = ordersData.filter((o) => o.status === 'completed').length;
+    const shipmentCount = ordersData.filter((o) => o.status === 'out_for_delivery').length;
+    const readyToShipCount = ordersData.filter((o) => o.status === 'packed').length;
     const orderGrowth = ordersData.length ? Math.round((completedCount / ordersData.length) * 100) : 0;
 
     const columns = [
@@ -443,6 +625,7 @@ const FarmerOrders = () => {
         },
         { title: 'Date', dataIndex: 'date', key: 'date' },
         { title: 'Buyer', dataIndex: 'buyer', key: 'buyer' },
+        { title: 'Type', dataIndex: 'orderType', key: 'orderType', render: (value) => <Tag color={value === 'bulk' ? 'purple' : value === 'harvest_request' ? 'geekblue' : 'default'}>{humanizeStatus(value)}</Tag> },
         { title: 'Items', dataIndex: 'items', key: 'items' },
         {
             title: 'Amount',
@@ -508,6 +691,7 @@ const FarmerOrders = () => {
                 return (
                     <Space>
                         <Button type="text" onClick={() => handleViewHistory(record.key)} title="View status history">History</Button>
+                        <Button type="text" onClick={() => openMessages(record.key)} title="Message buyer">Messages</Button>
                         {record.status === 'completed' && record.disputeStatus === 'none' ? (
                             <Button
                                 type="text"
@@ -536,7 +720,19 @@ const FarmerOrders = () => {
                                 >
                                     Reject
                                 </Button>
+                                <Button
+                                    type="text"
+                                    onClick={() => openEvidence(record.key)}
+                                    title="Attach dispute evidence"
+                                >
+                                    Evidence
+                                </Button>
                             </>
+                        ) : null}
+                        {record.disputeStatus !== 'none' && record.disputeStatus !== 'open' ? (
+                            <Button type="text" onClick={() => openEvidence(record.key)} title="View dispute evidence">
+                                Evidence
+                            </Button>
                         ) : null}
                         <Button
                             type="text"
@@ -567,12 +763,34 @@ const FarmerOrders = () => {
         },
     ];
 
+    const historyColumns = [
+        { title: 'When', dataIndex: 'when', key: 'when', width: 180 },
+        { title: 'From', dataIndex: 'from', key: 'from', width: 120 },
+        { title: 'To', dataIndex: 'to', key: 'to', width: 140 },
+        { title: 'Event', dataIndex: 'event', key: 'event', width: 160 },
+        { title: 'Category', dataIndex: 'category', key: 'category', width: 140 },
+        { title: 'Note', dataIndex: 'note', key: 'note', ellipsis: true },
+    ];
+
     const menuItems = [
         { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard', onClick: () => navigate('/farmer/dashboard') },
         { key: 'add-produce', icon: <PlusOutlined />, label: 'Add Produce', onClick: () => navigate('/farmer/add-produce') },
         { key: 'my-listings', icon: <UnorderedListOutlined />, label: 'My Listings', onClick: () => navigate('/farmer/listings') },
         { key: 'orders', icon: <ShoppingOutlined />, label: 'Orders', onClick: () => navigate('/farmer/orders') },
     ];
+
+    const notificationMenuItems = notifications.length
+        ? notifications.slice(0, 8).map((item) => ({
+            key: item.id,
+            label: (
+                <div style={{ maxWidth: 320 }}>
+                    <Text strong>{item.title}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: '12px' }}>{item.message}</Text>
+                </div>
+            ),
+        }))
+        : [{ key: 'empty', label: <Text type="secondary">No new notifications</Text>, disabled: true }];
 
     return (
         <Layout className="farmer-dashboard-layout">
@@ -589,11 +807,11 @@ const FarmerOrders = () => {
                 <Menu theme="dark" selectedKeys={['orders']} mode="inline" items={menuItems} className="sidebar-menu" />
                 <div className="user-profile-section">
                     <div className="user-profile-card">
-                        <Avatar size={40} icon={<UserOutlined />} src="https://i.pravatar.cc/150?img=12" />
+                        <Avatar size={40} icon={<UserOutlined />} />
                         {!collapsed && (
                             <div className="user-info">
                                 <Text strong style={{ color: 'white', fontSize: '14px' }}>{user?.name || 'Farmer'}</Text>
-                                <Tag color="success" style={{ fontSize: '10px', padding: '0 6px' }}>PRO SELLER</Tag>
+                                <Tag color="green" style={{ fontSize: '10px', padding: '0 6px' }}>{String(user?.farmer_profile?.badge || 'VERIFIED').toUpperCase()}</Tag>
                             </div>
                         )}
                     </div>
@@ -623,11 +841,13 @@ const FarmerOrders = () => {
                                 { value: 'amount_asc', label: 'Amount Low-High' },
                             ]}
                         />
-                        <Badge count={ordersData.filter((o) => o.status === 'pending').length} offset={[-5, 5]}>
-                            <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
-                        </Badge>
+                        <Dropdown menu={{ items: notificationMenuItems }} trigger={['click']}>
+                            <Badge count={notifications.length || ordersData.filter((o) => o.status === 'pending').length} offset={[-5, 5]}>
+                                <Button type="text" icon={<BellOutlined style={{ fontSize: '20px' }} />} aria-label="Notifications" />
+                            </Badge>
+                        </Dropdown>
                         <Dropdown menu={{ items: [{ key: 'logout', label: 'Logout', icon: <LogoutOutlined />, onClick: handleLogout }] }}>
-                            <Avatar icon={<UserOutlined />} aria-label="Account menu" src="https://i.pravatar.cc/150?img=12" style={{ cursor: 'pointer' }} />
+                            <Avatar icon={<UserOutlined />} aria-label="Account menu" style={{ cursor: 'pointer' }} />
                         </Dropdown>
                     </div>
                 </Header>
@@ -660,6 +880,38 @@ const FarmerOrders = () => {
                     </Row>
 
                     <Card className="activity-card">
+                        <Row gutter={[16, 16]} style={{ marginBottom: '12px' }}>
+                            <Col xs={24} md={8}>
+                                <Card size="small" title="Shipment Queue">
+                                    <Text type="secondary">Ready to ship: {readyToShipCount}</Text>
+                                    <br />
+                                    <Text type="secondary">In transit: {shipmentCount}</Text>
+                                </Card>
+                            </Col>
+                            <Col xs={24} md={8}>
+                                <Card size="small" title="Buyer Confirmation">
+                                    <Text type="secondary">
+                                        Completed orders are confirmed by buyer using "Mark Received".
+                                    </Text>
+                                </Card>
+                            </Col>
+                            <Col xs={24} md={8}>
+                                <Card size="small" title="Delivery SLA">
+                                    <Text type="secondary">
+                                        Pending {overdueOrders} overdue order(s). Update shipment stages to avoid delays.
+                                    </Text>
+                                </Card>
+                            </Col>
+                        </Row>
+                        <Row gutter={[16, 16]} style={{ marginBottom: '12px' }}>
+                            <Col xs={24}>
+                                <Card size="small" title="Harvest Request Flow">
+                                    <Text type="secondary">
+                                        Accept only when you can commit future supply. Mark ready only when the buyer can safely convert the request into a live order.
+                                    </Text>
+                                </Card>
+                            </Col>
+                        </Row>
                         <Row gutter={[16, 16]} style={{ marginBottom: '12px' }}>
                             <Col xs={24} md={12}>
                                 <Card size="small" title="Weekly Summary">
@@ -722,6 +974,47 @@ const FarmerOrders = () => {
                         />
                         <Table columns={columns} dataSource={tableData} className="activity-table" loading={loading} />
                         <Row gutter={[16, 16]} style={{ marginTop: '16px' }}>
+                            <Col xs={24} lg={12}>
+                                <Card size="small" title="Harvest Requests">
+                                    <Table
+                                        size="small"
+                                        pagination={false}
+                                        dataSource={harvestRequests.slice(0, 5).map((item) => ({
+                                            key: item.id,
+                                            product: item.product?.crop_name || 'Produce',
+                                            buyer: item.buyer?.name || 'Buyer',
+                                            quantity: `${item.requested_quantity} ${item.product?.unit || 'unit'}`,
+                                            preferred: item.preferred_harvest_date ? new Date(item.preferred_harvest_date).toLocaleDateString() : '-',
+                                            status: item.status,
+                                            raw: item,
+                                        }))}
+                                        columns={[
+                                            { title: 'Product', dataIndex: 'product', key: 'product' },
+                                            { title: 'Buyer', dataIndex: 'buyer', key: 'buyer' },
+                                            { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+                                            { title: 'Preferred', dataIndex: 'preferred', key: 'preferred' },
+                                            { title: 'Status', dataIndex: 'status', key: 'status', render: (value) => <Tag color={value === 'accepted' ? 'processing' : value === 'ready' ? 'success' : value === 'rejected' ? 'error' : 'warning'}>{humanizeStatus(value)}</Tag> },
+                                            {
+                                                title: 'Action',
+                                                key: 'action',
+                                                render: (_, record) => (
+                                                    <Space wrap>
+                                                        {record.raw.status === 'pending' ? (
+                                                            <>
+                                                                <Button size="small" loading={actionOrderId === `harvest-${record.key}`} onClick={() => handleHarvestRequestAction(record.key, 'accepted')}>Accept</Button>
+                                                                <Button size="small" danger loading={actionOrderId === `harvest-${record.key}`} onClick={() => handleHarvestRequestAction(record.key, 'rejected')}>Reject</Button>
+                                                            </>
+                                                        ) : null}
+                                                        {record.raw.status === 'accepted' ? (
+                                                            <Button size="small" loading={actionOrderId === `harvest-${record.key}`} onClick={() => handleHarvestRequestAction(record.key, 'ready')}>Mark Ready</Button>
+                                                        ) : null}
+                                                    </Space>
+                                                ),
+                                            },
+                                        ]}
+                                    />
+                                </Card>
+                            </Col>
                             <Col xs={24} lg={12}>
                                 <Card size="small" title="Recent Reviews">
                                     <Table
@@ -824,7 +1117,7 @@ const FarmerOrders = () => {
                     >
                         <DatePicker
                             style={{ width: '100%' }}
-                            disabledDate={(current) => current && current < new Date().setHours(0, 0, 0, 0)}
+                            disabledDate={(current) => current && current < dayjs().startOf('day')}
                         />
                     </Form.Item>
                     <Form.Item
@@ -843,27 +1136,38 @@ const FarmerOrders = () => {
                     </Form.Item>
                 </Form>
             </Modal>
-            <Modal title="Order Status History" open={historyModalOpen} onCancel={() => setHistoryModalOpen(false)} footer={null}>
-                <Table
-                    loading={historyLoading}
-                    pagination={false}
-                    dataSource={historyItems.map((item) => ({
-                        key: item.id,
-                        when: new Date(item.created_at).toLocaleString(),
-                        from: item.from_status,
-                        to: item.to_status,
-                        event: item.reason || '-',
-                        category: item.category || '-',
-                        note: item.note || item.reason || '-',
-                    }))}
-                    columns={[
-                        { title: 'When', dataIndex: 'when', key: 'when' },
-                        { title: 'From', dataIndex: 'from', key: 'from' },
-                        { title: 'To', dataIndex: 'to', key: 'to' },
-                        { title: 'Event', dataIndex: 'event', key: 'event' },
-                        { title: 'Category', dataIndex: 'category', key: 'category' },
-                        { title: 'Note', dataIndex: 'note', key: 'note' },
-                    ]}
+            <Modal
+                title="Order Status History"
+                open={historyModalOpen}
+                width={960}
+                styles={{ body: { maxHeight: '60vh', overflow: 'auto' } }}
+                onCancel={() => {
+                    setHistoryModalOpen(false);
+                    setHistoryTargetOrderId(null);
+                    setHistoryItems([]);
+                }}
+                footer={null}
+            >
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <Text><Text strong>Order:</Text> {historyTargetOrderId ? `#ORD-${historyTargetOrderId}` : '-'}</Text>
+                    {(() => {
+                        const last = [...(historyItems || [])].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()).at(-1);
+                        const currentStatus = last?.to_status || last?.from_status || '';
+                        if (!currentStatus) return null;
+                        return <Text><Text strong>Current Status:</Text> {statusTag(currentStatus)}</Text>;
+                    })()}
+                    <Steps
+                        size="small"
+                        current={getStepIndex((historyItems?.[0]?.to_status || historyItems?.[0]?.from_status || 'pending'))}
+                        items={statusSteps.map((s) => ({ title: humanizeStatus(s) }))}
+                    />
+                </Space>
+                <Divider style={{ margin: '16px 0' }} />
+
+                <Timeline
+                    mode="left"
+                    pending={historyLoading ? 'Loading history...' : undefined}
+                    items={timelineItems.length ? timelineItems : [{ children: <Text type="secondary">No history available yet.</Text> }]}
                 />
             </Modal>
             <Modal
@@ -892,6 +1196,103 @@ const FarmerOrders = () => {
                         <Input.TextArea rows={3} placeholder="Enter reason" />
                     </Form.Item>
                 </Form>
+            </Modal>
+            <Modal
+                title={messageTargetOrderId ? `Messages for #ORD-${messageTargetOrderId}` : 'Order Messages'}
+                open={messageModalOpen}
+                onCancel={() => {
+                    setMessageModalOpen(false);
+                    setMessageTargetOrderId(null);
+                    setMessageItems([]);
+                    messageForm.resetFields();
+                }}
+                onOk={handleSendMessage}
+                okText="Send"
+                confirmLoading={messageSubmitting}
+            >
+                <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text type="secondary">Use this thread for delivery coordination, substitutions, or harvest readiness updates.</Text>
+                    <Card size="small" loading={messageLoading}>
+                        <Space direction="vertical" style={{ width: '100%' }}>
+                            {messageItems.map((item) => (
+                                <Card key={item.id} size="small">
+                                    <Text strong>{item?.sender?.name || humanizeStatus(item.sender_role)}</Text>
+                                    <br />
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
+                                    </Text>
+                                    <br />
+                                    <Text>{item.message}</Text>
+                                </Card>
+                            ))}
+                            {!messageLoading && messageItems.length === 0 ? <Text type="secondary">No messages yet.</Text> : null}
+                        </Space>
+                    </Card>
+                    <Form form={messageForm} layout="vertical">
+                        <Form.Item
+                            label="Message"
+                            name="message"
+                            rules={[
+                                { required: true, message: 'Enter a message' },
+                                { min: 2, message: 'Enter at least 2 characters' },
+                                { max: 500, message: 'Maximum 500 characters' },
+                            ]}
+                        >
+                            <Input.TextArea rows={4} placeholder="Send the buyer a clear operational update" />
+                        </Form.Item>
+                    </Form>
+                </Space>
+            </Modal>
+            <Modal
+                title={evidenceTargetOrderId ? `Dispute Evidence for #ORD-${evidenceTargetOrderId}` : 'Dispute Evidence'}
+                open={evidenceModalOpen}
+                onCancel={() => {
+                    setEvidenceModalOpen(false);
+                    setEvidenceTargetOrderId(null);
+                    setEvidenceItems([]);
+                    evidenceForm.resetFields();
+                }}
+                onOk={handleAddEvidence}
+                okText="Add Evidence"
+                confirmLoading={evidenceSubmitting}
+            >
+                <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text type="secondary">Attach factual notes or uploaded image URLs to support the dispute review.</Text>
+                    <Card size="small" loading={evidenceLoading}>
+                        <Space direction="vertical" style={{ width: '100%' }}>
+                            {evidenceItems.map((item) => (
+                                <Card key={item.id} size="small">
+                                    <Text strong>{item?.uploader?.name || 'Participant'}</Text>
+                                    <br />
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
+                                    </Text>
+                                    {item.note ? (
+                                        <>
+                                            <br />
+                                            <Text>{item.note}</Text>
+                                        </>
+                                    ) : null}
+                                    {item.evidence_url ? (
+                                        <>
+                                            <br />
+                                            <a href={item.evidence_url} target="_blank" rel="noreferrer">Open evidence</a>
+                                        </>
+                                    ) : null}
+                                </Card>
+                            ))}
+                            {!evidenceLoading && evidenceItems.length === 0 ? <Text type="secondary">No evidence submitted yet.</Text> : null}
+                        </Space>
+                    </Card>
+                    <Form form={evidenceForm} layout="vertical">
+                        <Form.Item label="Evidence Note" name="note" rules={[{ max: 500, message: 'Maximum 500 characters' }]}>
+                            <Input.TextArea rows={3} placeholder="Describe what happened and what this evidence proves" />
+                        </Form.Item>
+                        <Form.Item label="Evidence URL" name="evidence_url" rules={[{ type: 'url', warningOnly: true, message: 'Enter a valid URL' }]}>
+                            <Input placeholder="Paste an uploaded image or document URL" />
+                        </Form.Item>
+                    </Form>
+                </Space>
             </Modal>
         </Layout>
     );
